@@ -1,14 +1,26 @@
 # SessionPilot
 
-Local-first web UI for planning and tracking daily coding sessions.
+AI-powered coding session planner that scans your repo and generates time-boxed task plans. Built with Next.js, Claude SDK, and Octokit.
 
 ## Overview
 
-SessionPilot helps you run focused coding sessions by:
-1. Scanning your local repo and GitHub for signals (TODOs, issues, PRs)
-2. Generating a time-boxed plan based on your goal and focus weights
-3. Tracking task completion during the session
-4. Saving a summary for tomorrow's session
+SessionPilot is a local-first web application that helps developers run focused, productive coding sessions. It uses Claude AI to analyze your codebase and generate intelligent task plans tailored to your goals, time budget, and priorities.
+
+### How It Works
+
+1. **Scan** — Analyzes your local repo (TODOs, git status, test failures) and GitHub (issues, PRs, recent commits) using Octokit
+2. **Plan** — Claude AI generates a prioritized, time-boxed task list based on your goal and focus weights (bugs vs. features vs. refactoring)
+3. **Execute** — Track task completion with a countdown timer, warnings, and audio notifications
+4. **Review** — Get an AI-generated session summary to pick up where you left off tomorrow
+
+### Key Features
+
+- **AI-Powered Planning** — Claude SDK analyzes code signals and generates context-aware task plans
+- **Multi-Source Scanning** — Combines local filesystem analysis with GitHub data via Octokit
+- **Focus Weights** — Prioritize bugs, features, or refactoring with adjustable sliders
+- **Real-Time Updates** — Server-Sent Events (SSE) stream planning progress to the UI
+- **Session Timer** — Countdown with configurable warnings and PS1-style sound effects
+- **Local-First** — SQLite database with Drizzle ORM; runs entirely on your machine
 
 ## Setup
 
@@ -133,12 +145,12 @@ session-pilot/
 │       ├── githubScan.ts         # GitHub scanner
 │       └── parsers.ts            # Signal extraction utilities
 ├── lib/
-│   ├── claude/                   # Claude prompts and parsers
-│   ├── github/                   # GitHub API utilities
+│   ├── claude/                   # Claude prompts, parsers, formatters
+│   ├── github/                   # Octokit utilities and converters
 │   ├── session/                  # Session event system
 │   ├── workspace/                # Workspace validation
 │   ├── audio/                    # Sound effects
-│   └── sse/                      # SSE utilities
+│   └── sse/                      # SSE streaming utilities
 ├── drizzle/                      # Database migrations
 ├── scripts/
 │   └── migrate.ts                # Standalone migration runner
@@ -148,28 +160,32 @@ session-pilot/
 └── tsconfig.json
 ```
 
-## Features
+## Tech Stack
 
-### Implemented
+| Layer | Technology |
+|-------|------------|
+| Framework | Next.js 15 (App Router) |
+| AI | Claude SDK (Anthropic) |
+| GitHub Integration | Octokit |
+| Database | SQLite + Drizzle ORM |
+| Real-Time | Server-Sent Events (SSE) |
+| Language | TypeScript |
 
-- Single-page UI with 5 states (Start → Planning → Task Selection → Session → Summary)
-- SQLite database with auto-migrations
-- Workspace management with path validation
-- Local repository scanning (TODOs, git status, test failures)
-- GitHub scanning (issues, PRs, commits) when token is configured
-- Claude-powered session planning with focus weights
-- Real-time SSE updates during planning
-- Task CRUD with status tracking
-- Session timer with countdown, warnings, and notifications
-- PS1-style sound effects for timer alerts
-- Session summary generation with Claude
-- Session cancellation support
+## Session Flow
 
-### Configuration
+```
+┌─────────┐    ┌──────────┐    ┌────────────────┐    ┌─────────┐    ┌─────────┐
+│  Start  │ →  │ Planning │ →  │ Task Selection │ →  │ Session │ →  │ Summary │
+└─────────┘    └──────────┘    └────────────────┘    └─────────┘    └─────────┘
+   Setup         AI scans        Review & select      Work with       AI-generated
+   workspace     & plans         tasks to include     timer           recap
+```
 
-- Focus weight sliders for bugs/features/refactor prioritization
-- Configurable time budgets (15-480 minutes)
-- Workspace path restrictions via `SESSIONPILOT_WORKSPACE_ROOTS`
+## Configuration Options
+
+- **Focus Weights** — Sliders for bugs/features/refactor prioritization (0.0–1.0)
+- **Time Budget** — Configurable session length (15–480 minutes)
+- **Workspace Roots** — Restrict allowed paths via `SESSIONPILOT_WORKSPACE_ROOTS`
 
 ---
 

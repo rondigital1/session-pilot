@@ -260,6 +260,21 @@ export async function listSessionTasks(sessionId: string): Promise<SessionTask[]
 }
 
 /**
+ * Get a single task by ID
+ * 
+ * Used for IDOR protection - to verify task ownership before updates
+ */
+export async function getTask(taskId: string): Promise<SessionTask | undefined> {
+  await ensureInitialized();
+  const db = getDb();
+  const result = await db
+    .select()
+    .from(sessionTasks)
+    .where(eq(sessionTasks.id, taskId));
+  return result[0];
+}
+
+/**
  * Update task status
  */
 export async function updateTaskStatus(

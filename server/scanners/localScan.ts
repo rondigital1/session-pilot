@@ -1,7 +1,7 @@
 import type { ScanSignal } from "@/server/types/domain";
-import { exec } from "@/server/utils/shell";
+import { runCommand } from "@/server/utils/shell";
 import { findFiles, readFiles } from "@/server/utils/fs";
-import { extractTodos, parseGitStatus, parseTestOutput } from "./parsers";
+import { extractTodos, parseGitStatus } from "./parsers";
 
 const DEFAULT_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx"];
 const DEFAULT_IGNORE = ["node_modules/**", ".git/**", "dist/**", "build/**"];
@@ -9,7 +9,6 @@ const DEFAULT_IGNORE = ["node_modules/**", ".git/**", "dist/**", "build/**"];
 export interface LocalScanOptions {
   workspacePath: string;
   sessionId: string;
-  includeTests?: boolean;
   excludePatterns?: string[];
 }
 
@@ -20,12 +19,17 @@ export interface LocalScanResult {
 }
 
 /**
- * Scan a local repository for signals (TODOs, git changes, test failures).
+ * Scan a local repository for signals (TODOs, git changes).
+ * 
+ * SECURITY NOTES:
+ * - Uses runCommand() with args array to prevent shell injection
+ * - Test execution has been removed as it runs untrusted code
+ * - File reading is restricted to source files with known extensions
  */
 export async function scanLocalRepository(
   options: LocalScanOptions
 ): Promise<LocalScanResult> {
-  const { workspacePath, sessionId, includeTests, excludePatterns = [] } = options;
+  const { workspacePath, sessionId, excludePatterns = [] } = options;
   const signals: ScanSignal[] = [];
   const errors: string[] = [];
 
@@ -44,15 +48,24 @@ export async function scanLocalRepository(
       signals.push(...extractTodos(content, filePath, sessionId));
     }
 
-    // Get git status (pass sessionId for unique IDs)
-    const gitOutput = await exec("git status --porcelain", workspacePath);
-    signals.push(...parseGitStatus(gitOutput, sessionId));
-
-    // Optionally run tests (pass sessionId for unique IDs)
-    if (includeTests) {
-      const testOutput = await exec("npm test", workspacePath);
-      signals.push(...parseTestOutput(testOutput, sessionId));
+    // Get git status using safe command execution
+    // SECURITY: Using runCommand with args array prevents shell injection
+    try {
+      const gitOutput = await runCommand(
+        "git",
+        ["status", "--porcelain"],
+        workspacePath,
+        10000 // 10 second timeout for git status
+      );
+      signals.push(...parseGitStatus(gitOutput, sessionId));
+    } catch (gitError) {
+      // Git may not be available or directory may not be a repo
+      errors.push(`Git status failed: ${gitError}`);
     }
+
+    // NOTE: Test execution has been removed for security reasons.
+    // Running `npm test` would execute arbitrary code from the repository,
+    // which is a significant security risk for untrusted codebases.
 
     return { signals, scannedFiles: contents.size, errors };
   } catch (error) {
@@ -62,4 +75,4 @@ export async function scanLocalRepository(
 }
 
 // Re-export parsers for direct use if needed
-export { extractTodos, parseGitStatus, parseTestOutput } from "./parsers";
+export { extractTodos, parseGitStatus } from "./parsers";

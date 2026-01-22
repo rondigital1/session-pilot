@@ -11,6 +11,7 @@ import {
   extractTaskNotes,
 } from "@/lib/session";
 import { generateSummary } from "@/server/agent";
+import { validateCsrfProtection, addSecurityHeaders } from "@/lib/security";
 
 // Force Node.js runtime
 export const runtime = "nodejs";
@@ -18,6 +19,8 @@ export const runtime = "nodejs";
 /**
  * POST /api/session/[id]/end
  * End a session and generate a summary
+ *
+ * SECURITY: Protected by CSRF validation
  *
  * Request body (optional):
  * {
@@ -36,6 +39,12 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // SECURITY: Validate CSRF protection
+  const csrfError = validateCsrfProtection(request);
+  if (csrfError) {
+    return addSecurityHeaders(csrfError);
+  }
+
   try {
     const { id: sessionId } = await params;
     let body: EndSessionRequest = {};
@@ -49,14 +58,15 @@ export async function POST(
     // Validate session exists
     const session = await getSession(sessionId);
     if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      return addSecurityHeaders(
+        NextResponse.json({ error: "Session not found" }, { status: 404 })
+      );
     }
 
     // Check session can be ended
     if (session.status === "completed" || session.status === "cancelled") {
-      return NextResponse.json(
-        { error: `Session is already ${session.status}` },
-        { status: 400 }
+      return addSecurityHeaders(
+        NextResponse.json({ error: `Session is already ${session.status}` }, { status: 400 })
       );
     }
 
@@ -97,9 +107,8 @@ export async function POST(
     const updatedSession = await endSession(sessionId, summary);
 
     if (!updatedSession) {
-      return NextResponse.json(
-        { error: "Failed to end session" },
-        { status: 500 }
+      return addSecurityHeaders(
+        NextResponse.json({ error: "Failed to end session" }, { status: 500 })
       );
     }
 
@@ -110,12 +119,11 @@ export async function POST(
       tasksTotal,
     };
 
-    return NextResponse.json(response);
+    return addSecurityHeaders(NextResponse.json(response));
   } catch (error) {
     console.error("Failed to end session:", error);
-    return NextResponse.json(
-      { error: "Failed to end session" },
-      { status: 500 }
+    return addSecurityHeaders(
+      NextResponse.json({ error: "Failed to end session" }, { status: 500 })
     );
   }
 }

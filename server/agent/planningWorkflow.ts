@@ -81,7 +81,6 @@ export async function runPlanningWorkflow(
       const localResult = await scanLocalRepository({
         workspacePath: workspace.localPath,
         sessionId,
-        includeTests: false,
       });
 
       allSignals.push(...localResult.signals);

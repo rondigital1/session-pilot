@@ -6,6 +6,7 @@ import {
 } from "@/server/db/queries";
 import type { CreateWorkspaceRequest } from "@/server/types/domain";
 import { validateWorkspace } from "@/lib/workspace";
+import { validateCsrfProtection, addSecurityHeaders } from "@/lib/security";
 
 // Force Node.js runtime
 export const runtime = "nodejs";
@@ -18,24 +19,28 @@ interface RouteParams {
  * GET /api/workspaces/[id]
  * Get a single workspace by ID
  */
-export async function GET(_request: NextRequest, { params }: RouteParams) {
+export async function GET(request: NextRequest, { params }: RouteParams) {
+  // SECURITY: Validate CSRF protection
+  const csrfError = validateCsrfProtection(request);
+  if (csrfError) {
+    return addSecurityHeaders(csrfError);
+  }
+
   try {
     const { id } = await params;
     const workspace = await getWorkspace(id);
 
     if (!workspace) {
-      return NextResponse.json(
-        { error: "Workspace not found" },
-        { status: 404 }
+      return addSecurityHeaders(
+        NextResponse.json({ error: "Workspace not found" }, { status: 404 })
       );
     }
 
-    return NextResponse.json({ workspace });
+    return addSecurityHeaders(NextResponse.json({ workspace }));
   } catch (error) {
     console.error("Failed to get workspace:", error);
-    return NextResponse.json(
-      { error: "Failed to get workspace" },
-      { status: 500 }
+    return addSecurityHeaders(
+      NextResponse.json({ error: "Failed to get workspace" }, { status: 500 })
     );
   }
 }
@@ -43,6 +48,8 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
 /**
  * PUT /api/workspaces/[id]
  * Update a workspace
+ *
+ * SECURITY: Protected by CSRF validation
  *
  * Request body:
  * {
@@ -52,6 +59,12 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
  * }
  */
 export async function PUT(request: NextRequest, { params }: RouteParams) {
+  // SECURITY: Validate CSRF protection
+  const csrfError = validateCsrfProtection(request);
+  if (csrfError) {
+    return addSecurityHeaders(csrfError);
+  }
+
   try {
     const { id } = await params;
     const body: Partial<CreateWorkspaceRequest> = await request.json();
@@ -59,9 +72,8 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     // Check workspace exists
     const existing = await getWorkspace(id);
     if (!existing) {
-      return NextResponse.json(
-        { error: "Workspace not found" },
-        { status: 404 }
+      return addSecurityHeaders(
+        NextResponse.json({ error: "Workspace not found" }, { status: 404 })
       );
     }
 
@@ -81,7 +93,9 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     });
 
     if (!validation.valid) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return addSecurityHeaders(
+        NextResponse.json({ error: validation.error }, { status: 400 })
+      );
     }
 
     // Build update object with only provided fields
@@ -103,12 +117,11 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
 
     const workspace = await updateWorkspace(id, updateData);
 
-    return NextResponse.json({ workspace });
+    return addSecurityHeaders(NextResponse.json({ workspace }));
   } catch (error) {
     console.error("Failed to update workspace:", error);
-    return NextResponse.json(
-      { error: "Failed to update workspace" },
-      { status: 500 }
+    return addSecurityHeaders(
+      NextResponse.json({ error: "Failed to update workspace" }, { status: 500 })
     );
   }
 }
@@ -116,35 +129,40 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
 /**
  * DELETE /api/workspaces/[id]
  * Delete a workspace
+ *
+ * SECURITY: Protected by CSRF validation
  */
-export async function DELETE(_request: NextRequest, { params }: RouteParams) {
+export async function DELETE(request: NextRequest, { params }: RouteParams) {
+  // SECURITY: Validate CSRF protection
+  const csrfError = validateCsrfProtection(request);
+  if (csrfError) {
+    return addSecurityHeaders(csrfError);
+  }
+
   try {
     const { id } = await params;
 
     // Check workspace exists
     const existing = await getWorkspace(id);
     if (!existing) {
-      return NextResponse.json(
-        { error: "Workspace not found" },
-        { status: 404 }
+      return addSecurityHeaders(
+        NextResponse.json({ error: "Workspace not found" }, { status: 404 })
       );
     }
 
     const deleted = await deleteWorkspace(id);
 
     if (!deleted) {
-      return NextResponse.json(
-        { error: "Failed to delete workspace" },
-        { status: 500 }
+      return addSecurityHeaders(
+        NextResponse.json({ error: "Failed to delete workspace" }, { status: 500 })
       );
     }
 
-    return NextResponse.json({ success: true });
+    return addSecurityHeaders(NextResponse.json({ success: true }));
   } catch (error) {
     console.error("Failed to delete workspace:", error);
-    return NextResponse.json(
-      { error: "Failed to delete workspace" },
-      { status: 500 }
+    return addSecurityHeaders(
+      NextResponse.json({ error: "Failed to delete workspace" }, { status: 500 })
     );
   }
 }
