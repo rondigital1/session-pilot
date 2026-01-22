@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listWorkspaces, createWorkspace } from "@/server/db/queries";
 import type { CreateWorkspaceRequest } from "@/server/types/domain";
+import { validateWorkspace } from "@/lib/workspace";
 
 // Force Node.js runtime
 export const runtime = "nodejs";
@@ -29,33 +30,45 @@ export async function GET() {
  * Request body:
  * {
  *   name: string,
- *   localPath: string,
- *   githubRepo?: string  // Format: "owner/repo"
+ *   localPath?: string,          // Local filesystem path
+ *   githubRepo?: string          // Format: "owner/repo"
  * }
+ *
+ * At least one of localPath or githubRepo must be provided.
  */
 export async function POST(request: NextRequest) {
   try {
     const body: CreateWorkspaceRequest = await request.json();
 
     // Validate required fields
-    if (!body.name || !body.localPath) {
+    if (!body.name) {
       return NextResponse.json(
-        { error: "name and localPath are required" },
+        { error: "name is required" },
         { status: 400 }
       );
     }
 
-    // TODO(SessionPilot): Validate that localPath exists and is a directory.
-    // Use fs.stat() to check if path exists and is accessible.
-    // Consider checking if it's a git repository with fs.access('.git').
+    if (!body.localPath && !body.githubRepo) {
+      return NextResponse.json(
+        { error: "Either localPath or githubRepo must be provided" },
+        { status: 400 }
+      );
+    }
 
-    // TODO(SessionPilot): Validate that localPath is within allowed roots.
-    // Check against SESSIONPILOT_WORKSPACE_ROOTS env var.
-    // This prevents users from adding arbitrary system paths.
+    // Validate workspace configuration
+    const validation = await validateWorkspace({
+      name: body.name,
+      localPath: body.localPath,
+      githubRepo: body.githubRepo,
+      verifyGitHubRepo: Boolean(process.env.GITHUB_TOKEN),
+    });
 
-    // TODO(SessionPilot): Validate githubRepo format if provided.
-    // Should match pattern "owner/repo".
-    // Consider validating that the repo exists via GitHub API.
+    if (!validation.valid) {
+      return NextResponse.json(
+        { error: validation.error },
+        { status: 400 }
+      );
+    }
 
     const id = generateId();
     const now = new Date();
@@ -63,7 +76,7 @@ export async function POST(request: NextRequest) {
     const workspace = await createWorkspace({
       id,
       name: body.name,
-      localPath: body.localPath,
+      localPath: body.localPath || null,
       githubRepo: body.githubRepo || null,
       createdAt: now,
       updatedAt: now,

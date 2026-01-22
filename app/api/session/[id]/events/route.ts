@@ -1,9 +1,14 @@
 import { NextRequest } from "next/server";
 import { getSession } from "@/server/db/queries";
-import type { SSEEvent, SSEEventType } from "@/server/types/domain";
+import { pollSessionEvents } from "@/lib/session/events";
+import { safeClose } from "@/lib/sse";
 
 // Force Node.js runtime
 export const runtime = "nodejs";
+
+const POLL_INTERVAL_MS = 1000; // Poll every second
+const HEARTBEAT_INTERVAL_MS = 15000; // Send heartbeat every 15 seconds
+const MAX_POLL_DURATION_MS = 5 * 60 * 1000; // 5 minutes max
 
 /**
  * GET /api/session/[id]/events
@@ -13,6 +18,7 @@ export const runtime = "nodejs";
  * real-time updates about scanning progress, task generation, etc.
  *
  * Event types:
+ * - connected: Initial connection established
  * - scan_started: Scanning has begun
  * - scan_progress: Progress update from scanner
  * - scan_completed: Scanning finished
@@ -31,41 +37,162 @@ export async function GET(
   const { id: sessionId } = await params;
 
   // Validate session exists
-  const session = await getSession(sessionId);
+  let session;
+  try {
+    session = await getSession(sessionId);
+  } catch (error) {
+    console.error("[SSE Events] Database error fetching session:", error);
+    return new Response(
+      JSON.stringify({ error: "Database error", details: String(error) }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
+  
   if (!session) {
-    return new Response("Session not found", { status: 404 });
+    console.error("[SSE Events] Session not found:", sessionId);
+    return new Response(
+      JSON.stringify({ error: "Session not found", sessionId }),
+      { status: 404, headers: { "Content-Type": "application/json" } }
+    );
   }
 
-  // Create SSE stream
+  const encoder = new TextEncoder();
+  let lastEventId = 0;
+  let isStreamClosed = false;
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
+  let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  console.log(`[SSE Events] Client connecting to session ${sessionId}`);
+
+  // Create SSE stream with polling
   const stream = new ReadableStream({
-    async start(controller) {
-      const encoder = new TextEncoder();
-
-      // Helper to send SSE events
-      const sendEvent = (event: SSEEvent) => {
-        const data = `data: ${JSON.stringify(event)}\n\n`;
-        controller.enqueue(encoder.encode(data));
-      };
-
+    start(controller) {
       // Send initial connection event
-      sendEvent({
-        type: "scan_started",
+      console.log(`[SSE Events] Sending connected event for ${sessionId}`);
+      const connectedEvent = `data: ${JSON.stringify({
+        type: "connected",
         timestamp: new Date().toISOString(),
         data: { sessionId, message: "Connected to session events" },
+      })}\n\n`;
+      controller.enqueue(encoder.encode(connectedEvent));
+
+      // Start polling for events
+      async function pollForEvents() {
+        if (isStreamClosed) return;
+
+        try {
+          const { events, lastId, isComplete } = await pollSessionEvents(
+            sessionId,
+            lastEventId
+          );
+
+          if (events.length > 0) {
+            console.log(`[SSE Events] Sending ${events.length} events for ${sessionId}, isComplete: ${isComplete}`);
+          }
+
+          // Send any new events
+          for (const event of events) {
+            if (isStreamClosed) break;
+            const eventData = `data: ${JSON.stringify(event)}\n\n`;
+            controller.enqueue(encoder.encode(eventData));
+          }
+
+          lastEventId = lastId;
+
+          // Close stream if session is complete
+          if (isComplete) {
+            console.log(`[SSE Events] Session complete, closing stream for ${sessionId}`);
+            cleanup();
+            safeClose(controller);
+            return;
+          }
+        } catch (error) {
+          console.error("[SSE] Poll error:", error);
+          // Send error event
+          try {
+            const errorEvent = `data: ${JSON.stringify({
+              type: "error",
+              timestamp: new Date().toISOString(),
+              data: { code: "POLL_ERROR", message: "Failed to fetch events" },
+            })}\n\n`;
+            controller.enqueue(encoder.encode(errorEvent));
+          } catch {
+            // Stream closed
+            cleanup();
+          }
+        }
+      }
+
+      function cleanup() {
+        isStreamClosed = true;
+        if (pollInterval) {
+          clearInterval(pollInterval);
+          pollInterval = null;
+        }
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval);
+          heartbeatInterval = null;
+        }
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+      }
+      
+      // Send a heartbeat to keep the connection alive
+      function sendHeartbeat() {
+        if (isStreamClosed) return;
+        try {
+          const heartbeatEvent = `data: ${JSON.stringify({
+            type: "heartbeat",
+            timestamp: new Date().toISOString(),
+            data: {},
+          })}\n\n`;
+          controller.enqueue(encoder.encode(heartbeatEvent));
+        } catch {
+          // Stream closed, clean up
+          cleanup();
+        }
+      }
+
+      // Initial poll
+      pollForEvents();
+
+      // Set up polling interval
+      pollInterval = setInterval(pollForEvents, POLL_INTERVAL_MS);
+      
+      // Set up heartbeat interval to keep connection alive
+      heartbeatInterval = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+
+      // Set up max duration timeout
+      timeoutId = setTimeout(() => {
+        try {
+          const timeoutEvent = `data: ${JSON.stringify({
+            type: "session_timeout",
+            timestamp: new Date().toISOString(),
+            data: { sessionId, message: "SSE connection timed out" },
+          })}\n\n`;
+          controller.enqueue(encoder.encode(timeoutEvent));
+        } catch {
+          // Ignore
+        }
+        cleanup();
+        safeClose(controller);
+      }, MAX_POLL_DURATION_MS);
+
+      // Handle client disconnect
+      request.signal.addEventListener("abort", () => {
+        cleanup();
+        safeClose(controller);
       });
+    },
 
-      // TODO(SessionPilot): Replace mock events with real event streaming.
-      // This should integrate with the actual planning workflow:
-      // 1. Subscribe to scan progress events from localScan/githubScan
-      // 2. Subscribe to planning progress from the Claude agent
-      // 3. Subscribe to task creation events
-      // 4. Keep connection alive with periodic heartbeats
-      //
-      // Consider using an event emitter or pub/sub pattern to
-      // decouple the planning workflow from the SSE endpoint.
-
-      // For now, send mock events to demonstrate the flow
-      await sendMockEvents(sendEvent, sessionId, controller);
+    cancel() {
+      isStreamClosed = true;
+      if (pollInterval) clearInterval(pollInterval);
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      if (timeoutId) clearTimeout(timeoutId);
     },
   });
 
@@ -76,135 +203,4 @@ export async function GET(
       Connection: "keep-alive",
     },
   });
-}
-
-/**
- * Send mock events to demonstrate the SSE flow
- *
- * TODO(SessionPilot): Remove this function and replace with real event streaming
- */
-async function sendMockEvents(
-  sendEvent: (event: SSEEvent) => void,
-  sessionId: string,
-  controller: ReadableStreamDefaultController
-) {
-  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-  try {
-    // Simulate local scan
-    await delay(500);
-    sendEvent({
-      type: "scan_progress",
-      timestamp: new Date().toISOString(),
-      data: {
-        source: "local",
-        message: "Scanning local repository...",
-        progress: 0.3,
-      },
-    });
-
-    await delay(800);
-    sendEvent({
-      type: "scan_progress",
-      timestamp: new Date().toISOString(),
-      data: {
-        source: "local",
-        message: "Found 3 TODO comments, 1 failing test",
-        progress: 1.0,
-      },
-    });
-
-    // Simulate GitHub scan
-    await delay(500);
-    sendEvent({
-      type: "scan_progress",
-      timestamp: new Date().toISOString(),
-      data: {
-        source: "github",
-        message: "Fetching open issues and PRs...",
-        progress: 0.5,
-      },
-    });
-
-    await delay(600);
-    sendEvent({
-      type: "scan_completed",
-      timestamp: new Date().toISOString(),
-      data: {
-        message: "Scan complete. Found 6 signals.",
-        signalCount: 6,
-      },
-    });
-
-    // Simulate planning
-    await delay(400);
-    sendEvent({
-      type: "planning_started",
-      timestamp: new Date().toISOString(),
-      data: { message: "Generating session plan..." },
-    });
-
-    // Generate mock tasks
-    const mockTasks = [
-      {
-        id: `task_${sessionId}_1`,
-        title: "Fix failing unit test in auth module",
-        description: "The login test is failing due to a mock issue",
-        estimatedMinutes: 15,
-      },
-      {
-        id: `task_${sessionId}_2`,
-        title: "Address TODO in user service",
-        description: "Implement proper error handling for edge cases",
-        estimatedMinutes: 20,
-      },
-      {
-        id: `task_${sessionId}_3`,
-        title: "Review open PR #42",
-        description: "Colleague requested code review",
-        estimatedMinutes: 25,
-      },
-    ];
-
-    for (const task of mockTasks) {
-      await delay(300);
-      sendEvent({
-        type: "task_generated",
-        timestamp: new Date().toISOString(),
-        data: task,
-      });
-    }
-
-    await delay(300);
-    sendEvent({
-      type: "planning_completed",
-      timestamp: new Date().toISOString(),
-      data: {
-        message: "Planning complete. Ready to start session.",
-        taskCount: mockTasks.length,
-        totalEstimatedMinutes: 60,
-      },
-    });
-
-    // Keep connection alive with heartbeats
-    // TODO(SessionPilot): Implement proper heartbeat mechanism
-    // that continues until session ends or client disconnects
-  } catch {
-    // Stream was closed by client
-  } finally {
-    try {
-      controller.close();
-    } catch {
-      // Controller already closed
-    }
-  }
-}
-
-// Helper type for creating events
-function createEvent(type: SSEEventType, data: unknown): SSEEvent {
-  return {
-    type,
-    timestamp: new Date().toISOString(),
-    data,
-  };
 }

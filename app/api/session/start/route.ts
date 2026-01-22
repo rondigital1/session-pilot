@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSession, getWorkspace } from "@/server/db/queries";
 import type { StartSessionRequest, StartSessionResponse } from "@/server/types/domain";
-
+import { runPlanningWorkflow } from "@/server/agent/planningWorkflow";
 // Force Node.js runtime
 export const runtime = "nodejs";
 
@@ -89,16 +89,19 @@ export async function POST(request: NextRequest) {
       startedAt: now,
     });
 
-    // TODO(SessionPilot): Trigger async planning workflow here.
-    // This should:
-    // 1. Run local scanner (server/scanners/localScan.ts)
-    // 2. Run GitHub scanner if workspace has githubRepo (server/scanners/githubScan.ts)
-    // 3. Store signals in database
-    // 4. Pass signals + user goal + focus weights to planning agent
-    // 5. Generate tasks and store them
-    // 6. Send SSE events throughout this process
-    //
-    // For now, the client will receive mock events from the /events endpoint.
+    // Trigger async planning workflow (non-blocking)
+    // The client should connect to /api/session/[id]/events for real-time updates
+    console.log(`[StartSession] Triggering planning workflow for session ${sessionId}`);
+    runPlanningWorkflow({
+      sessionId,
+      workspace,
+      userGoal: body.userGoal,
+      timeBudgetMinutes: body.timeBudgetMinutes,
+      focusWeights,
+    }).catch((error) => {
+      // Log but don't fail - errors are communicated via SSE
+      console.error("[StartSession] Planning workflow error:", error);
+    });
 
     const response: StartSessionResponse = {
       sessionId: session.id,

@@ -5,7 +5,12 @@ import {
   listSessionTasks,
   updateTaskStatus,
 } from "@/server/db/queries";
-import type { CreateTaskRequest, UpdateTaskRequest } from "@/server/types/domain";
+import type {
+  CreateTaskRequest,
+  UpdateTaskRequest,
+  UITaskChecklistItem,
+  UITaskContext,
+} from "@/server/types/domain";
 
 // Force Node.js runtime
 export const runtime = "nodejs";
@@ -27,7 +32,13 @@ export async function GET(
     }
 
     const tasks = await listSessionTasks(sessionId);
-    return NextResponse.json({ tasks });
+    return NextResponse.json({
+      tasks: tasks.map((task) => ({
+        ...task,
+        checklist: parseChecklist(task.checklist),
+        context: parseContext(task.context),
+      })),
+    });
   } catch (error) {
     console.error("Failed to list tasks:", error);
     return NextResponse.json(
@@ -84,11 +95,22 @@ export async function POST(
       description: body.description || null,
       estimatedMinutes: body.estimatedMinutes || null,
       status: "pending",
+      checklist: body.checklist ? JSON.stringify(body.checklist) : null,
+      context: body.context ? JSON.stringify(body.context) : null,
       order,
       createdAt: now,
     });
 
-    return NextResponse.json({ task }, { status: 201 });
+    return NextResponse.json(
+      {
+        task: {
+          ...task,
+          checklist: parseChecklist(task.checklist),
+          context: parseContext(task.context),
+        },
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error("Failed to create task:", error);
     return NextResponse.json(
@@ -146,13 +168,27 @@ export async function PATCH(
     // TODO(SessionPilot): Validate that the task belongs to this session.
     // Currently we trust the taskId without verification.
 
-    const task = await updateTaskStatus(body.taskId, body.status, body.notes);
+    const task = await updateTaskStatus(
+      body.taskId,
+      body.status,
+      body.notes,
+      body.checklist ? JSON.stringify(body.checklist) : undefined,
+      body.context ? JSON.stringify(body.context) : undefined
+    );
 
     if (!task) {
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ task });
+    return NextResponse.json({
+      task: task
+        ? {
+            ...task,
+            checklist: parseChecklist(task.checklist),
+            context: parseContext(task.context),
+          }
+        : task,
+    });
   } catch (error) {
     console.error("Failed to update task:", error);
     return NextResponse.json(
@@ -164,4 +200,28 @@ export async function PATCH(
 
 function generateTaskId(): string {
   return `task_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+}
+
+function parseChecklist(value: string | null): UITaskChecklistItem[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseContext(value: string | null): UITaskContext | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value) as UITaskContext;
+    return parsed;
+  } catch {
+    return undefined;
+  }
 }
