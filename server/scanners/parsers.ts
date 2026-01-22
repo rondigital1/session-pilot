@@ -17,21 +17,25 @@ const GIT_STATUS_PRIORITY: Record<string, number> = {
 
 /**
  * Extract TODO/FIXME/HACK/XXX comments from file content.
+ * @param sessionId - Session ID to make signal IDs unique per session
  */
-export function extractTodos(content: string, filePath: string): ScanSignal[] {
+export function extractTodos(content: string, filePath: string, sessionId?: string): ScanSignal[] {
   if (!content) return [];
 
   const signals: ScanSignal[] = [];
   const lines = content.split("\n");
   const todoRegex =
     /(?:\/\/|\/\*|#|<!--)\s*(TODO|FIXME|HACK|XXX)\b[\s:]*([^\r\n]*?)(?:\*\/|-->)?$/i;
+  
+  // Use sessionId prefix if provided to ensure uniqueness across sessions
+  const idPrefix = sessionId ? `${sessionId}_` : "";
 
   lines.forEach((line, idx) => {
     const match = line.match(todoRegex);
     if (match) {
       const keyword = match[1].toUpperCase();
       signals.push({
-        id: `todo_${filePath}_${idx}`,
+        id: `${idPrefix}todo_${filePath}_${idx}`,
         source: "local",
         signalType: "todo_comment",
         title: match[2]?.trim() || keyword,
@@ -48,9 +52,13 @@ export function extractTodos(content: string, filePath: string): ScanSignal[] {
 
 /**
  * Parse git status --porcelain output.
+ * @param sessionId - Session ID to make signal IDs unique per session
  */
-export function parseGitStatus(output: string): ScanSignal[] {
+export function parseGitStatus(output: string, sessionId?: string): ScanSignal[] {
   if (!output) return [];
+
+  // Use sessionId prefix if provided to ensure uniqueness across sessions
+  const idPrefix = sessionId ? `${sessionId}_` : "";
 
   return output
     .split("\n")
@@ -72,7 +80,7 @@ export function parseGitStatus(output: string): ScanSignal[] {
       const isConflict = status === "conflict";
 
       return {
-        id: `git_${idx}_${filePath}`,
+        id: `${idPrefix}git_${idx}_${filePath}`,
         source: "local" as const,
         signalType: isConflict ? "merge_conflict" : ("custom" as const),
         title: isConflict
@@ -102,12 +110,16 @@ function getGitFileStatus(staged: string, unstaged: string): string {
 
 /**
  * Parse test runner output (jest/vitest/mocha) for failures.
+ * @param sessionId - Session ID to make signal IDs unique per session
  */
-export function parseTestOutput(output: string): ScanSignal[] {
+export function parseTestOutput(output: string, sessionId?: string): ScanSignal[] {
   if (!output) return [];
 
   const signals: ScanSignal[] = [];
   const lines = output.split("\n");
+
+  // Use sessionId prefix if provided to ensure uniqueness across sessions
+  const idPrefix = sessionId ? `${sessionId}_` : "";
 
   let currentFile: string | undefined;
   let currentTest: string | undefined;
@@ -115,7 +127,7 @@ export function parseTestOutput(output: string): ScanSignal[] {
 
   function addTestSignal() {
     signals.push({
-      id: `test_${idx++}_${currentFile ?? "unknown"}`,
+      id: `${idPrefix}test_${idx++}_${currentFile ?? "unknown"}`,
       source: "local",
       signalType: "failing_test",
       title: currentTest

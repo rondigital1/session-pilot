@@ -61,13 +61,13 @@ export function commitToSignal(
     priority -= 0.1;
   }
 
-  const sha = commit.sha ?? `unknown_${_sessionId}`;
+  const sha = commit.sha ?? `unknown`;
   const shortSha = sha.slice(0, 7);
   const authorName =
     commit.author?.login ?? commit.commit?.author?.name ?? "unknown";
 
   return {
-    id: `sig_gh_commit_${sha}`,
+    id: `${_sessionId}_sig_gh_commit_${sha}`,
     source: "github",
     signalType: "recent_commit",
     title: `Recent commit: ${subject || shortSha}`,
@@ -155,10 +155,10 @@ export function issueToSignal(
     priority -= 0.1;
   }
 
-  const idSuffix = issue.id ?? issue.number ?? `unknown_${_sessionId}`;
+  const idSuffix = issue.id ?? issue.number ?? "unknown";
 
   return {
-    id: `sig_gh_issue_${idSuffix}`,
+    id: `${_sessionId}_sig_gh_issue_${idSuffix}`,
     source: "github",
     signalType: "open_issue",
     title: issue.title ?? "Untitled issue",
@@ -245,10 +245,10 @@ export function prToSignal(
     priority -= 0.2;
   }
 
-  const idSuffix = pr.id ?? pr.number ?? `unknown_${_sessionId}`;
+  const idSuffix = pr.id ?? pr.number ?? "unknown";
 
   return {
-    id: `sig_gh_pr_${idSuffix}`,
+    id: `${_sessionId}_sig_gh_pr_${idSuffix}`,
     source: "github",
     signalType: "open_pr",
     title: pr.title ?? "Untitled PR",
@@ -265,6 +265,111 @@ export function prToSignal(
       hasRequestedChanges,
       hasMergeConflicts,
       mergeableState: pr.mergeable_state ?? undefined,
+    },
+  };
+}
+
+/**
+ * Convert a GitHub PR review comment to a ScanSignal
+ *
+ * PR review comments are inline code comments left during code review.
+ * These often contain actionable feedback that needs to be addressed.
+ *
+ * Priority scoring considers:
+ * - Comment on your PR (+0.3)
+ * - Comment is unresolved (+0.2)
+ * - Comment within last 3 days (+0.15)
+ * - Comment contains action words like "fix", "change", "should" (+0.1)
+ */
+export function prReviewCommentToSignal(
+  _comment: unknown,
+  prNumber: number,
+  prAuthor: string | undefined,
+  _sessionId: string
+): ScanSignal {
+  const comment = _comment as {
+    id?: number;
+    body?: string;
+    path?: string;
+    line?: number | null;
+    original_line?: number | null;
+    html_url?: string;
+    user?: { login?: string } | null;
+    created_at?: string;
+    updated_at?: string;
+    in_reply_to_id?: number;
+  };
+
+  const currentUser = getCurrentGitHubUser();
+  const isOnYourPr = currentUser ? prAuthor === currentUser : false;
+  const isYourComment = currentUser ? comment.user?.login === currentUser : false;
+
+  const createdAt = comment.created_at ? new Date(comment.created_at) : null;
+  const now = Date.now();
+  const ageMs = createdAt ? now - createdAt.getTime() : null;
+
+  const body = comment.body ?? "";
+  const bodyLower = body.toLowerCase();
+
+  // Check for actionable language in the comment
+  const hasActionableLanguage =
+    bodyLower.includes("fix") ||
+    bodyLower.includes("change") ||
+    bodyLower.includes("should") ||
+    bodyLower.includes("need") ||
+    bodyLower.includes("must") ||
+    bodyLower.includes("todo") ||
+    bodyLower.includes("please") ||
+    bodyLower.includes("consider");
+
+  let priority = 0.5;
+
+  // Higher priority if it's on your PR (you need to address it)
+  if (isOnYourPr && !isYourComment) {
+    priority += 0.3;
+  }
+
+  // Recent comments are more relevant
+  if (ageMs !== null && ageMs <= 3 * 24 * 60 * 60 * 1000) {
+    priority += 0.15;
+  }
+
+  // Actionable comments are higher priority
+  if (hasActionableLanguage) {
+    priority += 0.1;
+  }
+
+  // Skip if it's your own comment (you don't need to address your own feedback)
+  if (isYourComment) {
+    priority -= 0.3;
+  }
+
+  const idSuffix = comment.id ?? "unknown";
+  const filePath = comment.path ?? "unknown file";
+  const line = comment.line ?? comment.original_line;
+
+  // Create a concise title from the comment body
+  const titlePreview = body.length > 60 ? body.slice(0, 57) + "..." : body;
+  const cleanTitle = titlePreview.replace(/\r?\n/g, " ").trim();
+
+  return {
+    id: `${_sessionId}_sig_gh_pr_comment_${idSuffix}`,
+    source: "github",
+    signalType: "pr_review_comment",
+    title: `PR #${prNumber} comment: ${cleanTitle || "Review feedback"}`,
+    description: body || undefined,
+    filePath,
+    lineNumber: line ?? undefined,
+    url: comment.html_url,
+    priority: Math.min(1, Math.max(0, priority)),
+    metadata: {
+      prNumber,
+      commentId: comment.id,
+      author: comment.user?.login,
+      isOnYourPr,
+      isYourComment,
+      hasActionableLanguage,
+      createdAt: comment.created_at,
     },
   };
 }

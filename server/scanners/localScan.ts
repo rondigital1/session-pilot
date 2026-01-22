@@ -25,7 +25,7 @@ export interface LocalScanResult {
 export async function scanLocalRepository(
   options: LocalScanOptions
 ): Promise<LocalScanResult> {
-  const { workspacePath, includeTests, excludePatterns = [] } = options;
+  const { workspacePath, sessionId, includeTests, excludePatterns = [] } = options;
   const signals: ScanSignal[] = [];
   const errors: string[] = [];
 
@@ -39,19 +39,19 @@ export async function scanLocalRepository(
 
     const contents = await readFiles(workspacePath, files);
 
-    // Extract TODOs from each file
+    // Extract TODOs from each file (pass sessionId for unique IDs)
     for (const [filePath, content] of contents) {
-      signals.push(...extractTodos(content, filePath));
+      signals.push(...extractTodos(content, filePath, sessionId));
     }
 
-    // Get git status
+    // Get git status (pass sessionId for unique IDs)
     const gitOutput = await exec("git status --porcelain", workspacePath);
-    signals.push(...parseGitStatus(gitOutput));
+    signals.push(...parseGitStatus(gitOutput, sessionId));
 
-    // Optionally run tests
+    // Optionally run tests (pass sessionId for unique IDs)
     if (includeTests) {
       const testOutput = await exec("npm test", workspacePath);
-      signals.push(...parseTestOutput(testOutput));
+      signals.push(...parseTestOutput(testOutput, sessionId));
     }
 
     return { signals, scannedFiles: contents.size, errors };

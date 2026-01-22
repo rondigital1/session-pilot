@@ -15,7 +15,7 @@ import {
   commitToSignal,
   issueToSignal,
   prToSignal,
-  getMockGitHubSignals,
+  prReviewCommentToSignal,
 } from "@/lib/github";
 
 export interface GitHubScanOptions {
@@ -24,10 +24,12 @@ export interface GitHubScanOptions {
   sessionId: string;
   includeIssues?: boolean;
   includePRs?: boolean;
+  includePRComments?: boolean;
   includeRecentCommits?: boolean;
   assignedToMe?: boolean;
   maxIssues?: number;
   maxPRs?: number;
+  maxPRComments?: number;
 }
 
 export interface GitHubScanResult {
@@ -37,7 +39,7 @@ export interface GitHubScanResult {
 }
 
 // Re-export utilities for convenience
-export { parseGitHubRepo, getMockGitHubSignals };
+export { parseGitHubRepo };
 
 /**
  * Scan a GitHub repository for signals
@@ -64,8 +66,12 @@ export async function scanGitHubRepository(
   let rateLimitRemaining = -1;
 
   if (!process.env.GITHUB_TOKEN) {
-    errors.push("GITHUB_TOKEN not configured");
-    return { signals, rateLimitRemaining, errors };
+    console.warn("[GitHubScan] GITHUB_TOKEN not configured, skipping GitHub scan");
+    return {
+      signals: [],
+      rateLimitRemaining: -1,
+      errors: ["GITHUB_TOKEN not configured - skipping GitHub scan"],
+    };
   }
 
   const octokit = new Octokit({
@@ -131,6 +137,11 @@ export async function scanGitHubRepository(
   }
 
   // Fetch PRs
+  let fetchedPRs: Array<{
+    number: number;
+    user?: { login?: string } | null;
+  }> = [];
+  
   if (options.includePRs) {
     try {
       const response = await octokit.rest.pulls.list({
@@ -150,6 +161,7 @@ export async function scanGitHubRepository(
             )
         );
       }
+      fetchedPRs = prs;
       signals.push(...prs.map((pr) => prToSignal(pr, options.sessionId)));
       rateLimitRemaining = parseInt(
         response.headers["x-ratelimit-remaining"] ?? "-1",
@@ -157,6 +169,46 @@ export async function scanGitHubRepository(
       );
     } catch (error) {
       errors.push(`Error fetching PRs: ${error}`);
+    }
+  }
+
+  // Fetch PR review comments for open PRs
+  if (options.includePRComments && fetchedPRs.length > 0) {
+    const maxComments = options.maxPRComments || 10;
+    let totalComments = 0;
+
+    for (const pr of fetchedPRs) {
+      if (totalComments >= maxComments) break;
+
+      try {
+        const response = await octokit.rest.pulls.listReviewComments({
+          owner: options.owner,
+          repo: options.repo,
+          pull_number: pr.number,
+          per_page: Math.min(maxComments - totalComments, 10),
+        });
+
+        const prAuthor = pr.user?.login;
+        const commentSignals = response.data.map((comment) =>
+          prReviewCommentToSignal(comment, pr.number, prAuthor, options.sessionId)
+        );
+
+        // Filter to only include comments that aren't from the current user
+        // (their own comments don't need action)
+        const actionableComments = commentSignals.filter(
+          (signal) => !signal.metadata?.isYourComment
+        );
+
+        signals.push(...actionableComments);
+        totalComments += actionableComments.length;
+
+        rateLimitRemaining = parseInt(
+          response.headers["x-ratelimit-remaining"] ?? "-1",
+          10
+        );
+      } catch (error) {
+        errors.push(`Error fetching PR #${pr.number} comments: ${error}`);
+      }
     }
   }
 
