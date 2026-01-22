@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import type {
-  SessionState,
-  FocusWeights,
-  UIWorkspace,
-  UITask,
-  SSEEvent,
-} from "@/server/types/domain";
+import { useEffect, useState } from "react";
+import type { SSEEvent, UIWorkspace } from "@/server/types/domain";
+import AppShell from "./components/AppShell";
+import StartView from "./components/StartView";
+import PlanningView from "./components/PlanningView";
+import TaskSelectionView from "./components/TaskSelectionView";
+import SessionView from "./components/SessionView";
+import SummaryView from "./components/SummaryView";
+import WorkspaceManager from "./components/WorkspaceManager";
+import { useSession } from "./session-context";
 
 /**
  * SessionPilot - Single Page Application
@@ -15,79 +17,92 @@ import type {
  * States:
  * 1. Start - Select workspace, set time budget, focus sliders, enter goal
  * 2. Planning - SSE events show scanning progress and task generation
- * 3. Session - Work through tasks, check them off
- * 4. Summary - View session summary, save for tomorrow
- *
- * TODO(SessionPilot): Connect to real API endpoints.
- * Currently uses mock data for scaffolding demonstration.
+ * 3. Task Selection - User selects which tasks to include in the session
+ * 4. Session - Work through tasks, check them off
+ * 5. Summary - View session summary, save for tomorrow
  */
 
 export default function HomePage() {
-  // Current UI state
-  const [state, setState] = useState<SessionState>("start");
-
-  // Session configuration
   const [workspaces, setWorkspaces] = useState<UIWorkspace[]>([]);
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>("");
-  const [userGoal, setUserGoal] = useState<string>("");
-  const [timeBudget, setTimeBudget] = useState<number>(60);
-  const [focusWeights, setFocusWeights] = useState<FocusWeights>({
-    bugs: 0.5,
-    features: 0.5,
-    refactor: 0.3,
-  });
-
-  // Session data
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [tasks, setTasks] = useState<UITask[]>([]);
   const [events, setEvents] = useState<string[]>([]);
-  const [summary, setSummary] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>("");
+  const [showWorkspaceManager, setShowWorkspaceManager] = useState<boolean>(false);
+  const [eventSource, setEventSource] = useState<EventSource | null>(null);
 
-  // Load workspaces on mount
+  const {
+    sessionState,
+    setSessionState,
+    sessionId,
+    setSessionId,
+    tasks,
+    setTasks,
+    userGoal,
+    setUserGoal,
+    timeBudget,
+    setTimeBudget,
+    focusWeights,
+    setFocusWeights,
+    summary,
+    setSummary,
+    sessionStartedAt,
+    setSessionStartedAt,
+    syncTasksFromApi,
+    patchTask,
+    resetSession,
+  } = useSession();
+
   useEffect(() => {
     loadWorkspaces();
   }, []);
 
-  /**
-   * Load workspaces from API
-   */
+  useEffect(() => {
+    if (!sessionId) {
+      return;
+    }
+    if (tasks.length === 0 && sessionState !== "start") {
+      void syncTasksFromApi();
+    }
+  }, [sessionId, sessionState, syncTasksFromApi, tasks.length]);
+
+  // Reconnect to SSE or recover state if we're in planning state but have no connection
+  // (e.g., after page reload during planning)
+  useEffect(() => {
+    if (sessionId && sessionState === "planning" && !eventSource) {
+      console.log("[SSE Client] Reconnecting to session after page load");
+      setIsLoading(true);
+      connectToEvents(sessionId);
+    }
+  }, [sessionId, sessionState, eventSource]);
+  
+  // If we have tasks while in planning state, planning already completed - advance to task selection
+  useEffect(() => {
+    if (sessionState === "planning" && tasks.length > 0 && !isLoading) {
+      console.log("[Session] Planning complete with tasks, advancing to task selection");
+      setSessionState("task_selection");
+    }
+  }, [sessionState, tasks.length, isLoading, setSessionState]);
+
+  // Cleanup event source on unmount
+  useEffect(() => {
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, [eventSource]);
+
   async function loadWorkspaces() {
     try {
       const response = await fetch("/api/workspaces");
       const data = await response.json();
       setWorkspaces(data.workspaces || []);
-
-      // If no workspaces, add a mock one for demo
-      if (!data.workspaces || data.workspaces.length === 0) {
-        setWorkspaces([
-          {
-            id: "demo_workspace",
-            name: "Demo Workspace",
-            localPath: "/path/to/project",
-            githubRepo: "user/repo",
-          },
-        ]);
-      }
     } catch (error) {
       console.error("Failed to load workspaces:", error);
-      // Add demo workspace on error
-      setWorkspaces([
-        {
-          id: "demo_workspace",
-          name: "Demo Workspace",
-          localPath: "/path/to/project",
-          githubRepo: "user/repo",
-        },
-      ]);
+      setWorkspaces([]);
     }
   }
 
-  /**
-   * Start a new session
-   *
-   * TODO(SessionPilot): Connect to /api/session/start endpoint
-   */
   async function handleStartSession() {
     if (!selectedWorkspaceId || !userGoal) {
       return;
@@ -95,10 +110,9 @@ export default function HomePage() {
 
     setIsLoading(true);
     setEvents([]);
-    setState("planning");
+    setSessionState("planning");
 
     try {
-      // Call start session API
       const response = await fetch("/api/session/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -117,55 +131,111 @@ export default function HomePage() {
       }
 
       setSessionId(data.sessionId);
-
-      // Connect to SSE for events
       connectToEvents(data.sessionId);
     } catch (error) {
       console.error("Failed to start session:", error);
-      addEvent(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
-      // For demo, proceed with mock data
-      setSessionId("mock_session");
-      simulateMockPlanning();
+      addEvent(
+        `Error: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+      setIsLoading(false);
+      setSessionState("start");
     }
   }
 
-  /**
-   * Connect to SSE endpoint for session events
-   *
-   * TODO(SessionPilot): Implement proper error handling and reconnection
-   */
-  function connectToEvents(sessionId: string) {
-    const eventSource = new EventSource(`/api/session/${sessionId}/events`);
+  function connectToEvents(activeSessionId: string) {
+    // Close existing connection if any
+    if (eventSource) {
+      eventSource.close();
+    }
 
-    eventSource.onmessage = (event) => {
+    const eventUrl = `/api/session/${activeSessionId}/events`;
+    console.log(`[SSE Client] Connecting to ${eventUrl}`);
+    const es = new EventSource(eventUrl);
+    setEventSource(es);
+    
+    // Track connection status
+    let hasConnected = false;
+    let hasReceivedEvents = false;
+    let hasCompletedNormally = false;
+    let errorCount = 0;
+
+    es.onopen = () => {
+      hasConnected = true;
+      errorCount = 0;
+      console.log("SSE connection opened");
+    };
+
+    es.onmessage = (event) => {
+      hasReceivedEvents = true;
       try {
         const data: SSEEvent = JSON.parse(event.data);
+        // Track if we received a terminal event (session completed normally)
+        if (data.type === "planning_completed" || data.type === "session_ended") {
+          hasCompletedNormally = true;
+        }
         handleSSEEvent(data);
       } catch (error) {
         console.error("Failed to parse SSE event:", error);
       }
     };
 
-    eventSource.onerror = () => {
-      eventSource.close();
-      // For demo, continue with mock data if SSE fails
-      if (state === "planning" && tasks.length === 0) {
-        simulateMockPlanning();
+    es.onerror = () => {
+      errorCount++;
+      const state = es.readyState;
+      
+      // If session completed normally, any subsequent error/close is expected
+      if (hasCompletedNormally) {
+        console.log("SSE connection closed after session completed");
+        es.close();
+        setEventSource(null);
+        return;
+      }
+      
+      // If EventSource is reconnecting (CONNECTING state), let it retry silently
+      // EventSource auto-reconnects, so only log on first attempt or when closed
+      if (state === EventSource.CONNECTING && hasReceivedEvents) {
+        // Already received events, EventSource is just reconnecting - this is normal
+        // Don't log as error, just let it retry
+        return;
+      }
+      
+      // Only log true errors (never connected, or connection permanently closed)
+      if (state === EventSource.CLOSED || !hasConnected) {
+        const stateStr = state === EventSource.CONNECTING ? "CONNECTING" : 
+                         state === EventSource.OPEN ? "OPEN" : "CLOSED";
+        console.error(`SSE connection failed. ReadyState: ${stateStr}, errorCount: ${errorCount}`);
+        
+        es.close();
+        setEventSource(null);
+        
+        // Only show error to user if we never received any events
+        if (!hasReceivedEvents) {
+          addEvent("Connection lost. Please try again.");
+          setIsLoading(false);
+          setSessionState("start");
+        }
       }
     };
   }
 
-  /**
-   * Handle incoming SSE event
-   */
   function handleSSEEvent(event: SSEEvent) {
     const time = new Date(event.timestamp).toLocaleTimeString();
 
     switch (event.type) {
+      case "connected":
+        addEvent(`[${time}] Connected to session`);
+        break;
+
+      case "heartbeat":
+        // Ignore heartbeat events in the UI
+        break;
+
       case "scan_started":
       case "scan_progress":
       case "scan_completed":
-        addEvent(`[${time}] ${(event.data as { message?: string }).message || event.type}`);
+        addEvent(
+          `[${time}] ${(event.data as { message?: string }).message || event.type}`
+        );
         break;
 
       case "planning_started":
@@ -174,7 +244,7 @@ export default function HomePage() {
 
       case "task_generated": {
         const taskData = event.data as {
-          id: string;
+          taskId: string;
           title: string;
           description?: string;
           estimatedMinutes?: number;
@@ -182,7 +252,7 @@ export default function HomePage() {
         setTasks((prev) => [
           ...prev,
           {
-            id: taskData.id,
+            id: taskData.taskId,
             title: taskData.title,
             description: taskData.description,
             estimatedMinutes: taskData.estimatedMinutes,
@@ -196,167 +266,150 @@ export default function HomePage() {
       case "planning_completed":
         addEvent(`[${time}] Planning complete!`);
         setIsLoading(false);
-        // Auto-transition to session after brief delay
+        void syncTasksFromApi();
         setTimeout(() => {
-          setState("session");
+          setSessionState("task_selection");
         }, 1000);
         break;
 
-      case "error":
-        addEvent(`[${time}] Error: ${(event.data as { message?: string }).message}`);
+      case "session_ended": {
+        const endData = event.data as { cancelled?: boolean };
+        if (endData.cancelled) {
+          addEvent(`[${time}] Session cancelled`);
+        }
+        // Close event source
+        if (eventSource) {
+          eventSource.close();
+          setEventSource(null);
+        }
         break;
+      }
+
+      case "error": {
+        const errorData = event.data as { code?: string; message?: string };
+        addEvent(`[${time}] Error: ${errorData.message || "Unknown error"}`);
+        setIsLoading(false);
+        // If this is a critical error (like invalid workspace), allow retry
+        if (errorData.code === "INVALID_WORKSPACE" || errorData.code === "PLANNING_FAILED") {
+          // Keep in planning state to show the error, user can cancel to retry
+        }
+        break;
+      }
     }
   }
 
-  /**
-   * Add event to log
-   */
   function addEvent(message: string) {
     setEvents((prev) => [...prev, message]);
   }
 
-  /**
-   * Simulate planning for demo when API is not available
-   */
-  function simulateMockPlanning() {
-    const mockEvents = [
-      "Scanning local repository...",
-      "Found 3 TODO comments",
-      "Checking GitHub issues...",
-      "Found 2 open issues",
-      "Generating session plan...",
-    ];
-
-    const mockTasks: UITask[] = [
-      {
-        id: "task_1",
-        title: "Fix failing test in auth module",
-        description: "The login test is failing due to a mock issue",
-        estimatedMinutes: 15,
-        status: "pending",
-      },
-      {
-        id: "task_2",
-        title: "Address TODO in user service",
-        description: "Implement proper error handling",
-        estimatedMinutes: 20,
-        status: "pending",
-      },
-      {
-        id: "task_3",
-        title: "Review PR #42",
-        description: "Colleague requested code review",
-        estimatedMinutes: 25,
-        status: "pending",
-      },
-    ];
-
-    // Simulate events over time
-    let delay = 500;
-    mockEvents.forEach((msg) => {
-      setTimeout(() => {
-        addEvent(`[${new Date().toLocaleTimeString()}] ${msg}`);
-      }, delay);
-      delay += 600;
-    });
-
-    // Add tasks
-    setTimeout(() => {
-      setTasks(mockTasks);
-      addEvent(`[${new Date().toLocaleTimeString()}] Planning complete!`);
-      setIsLoading(false);
-
-      setTimeout(() => {
-        setState("session");
-      }, 1000);
-    }, delay);
+  function handleConfirmTaskSelection(selectedTaskIds: string[]) {
+    const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id));
+    setTasks(selectedTasks);
+    setSessionStartedAt(new Date().toISOString());
+    setSessionState("session");
   }
 
-  /**
-   * Toggle task completion
-   *
-   * TODO(SessionPilot): Call /api/session/[id]/task PATCH endpoint
-   */
+  function handleRegenerateTasks() {
+    if (!sessionId) return;
+
+    setTasks([]);
+    setEvents([]);
+    setSessionState("planning");
+    setIsLoading(true);
+    connectToEvents(sessionId);
+  }
+
   async function handleToggleTask(taskId: string) {
-    setTasks((prev) =>
-      prev.map((task) => {
-        if (task.id === taskId) {
-          const newStatus = task.status === "completed" ? "pending" : "completed";
-          return { ...task, status: newStatus };
-        }
-        return task;
-      })
-    );
-
-    // TODO(SessionPilot): Sync with API
-    // await fetch(`/api/session/${sessionId}/task`, {
-    //   method: 'PATCH',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({ taskId, status: newStatus })
-    // });
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task) {
+      return;
+    }
+    const status = task.status === "completed" ? "pending" : "completed";
+    await patchTask(taskId, { status });
   }
 
-  /**
-   * End the current session
-   *
-   * TODO(SessionPilot): Call /api/session/[id]/end endpoint
-   */
   async function handleEndSession() {
+    if (!sessionId) return;
+
     setIsLoading(true);
 
     try {
-      if (sessionId && sessionId !== "mock_session") {
-        const response = await fetch(`/api/session/${sessionId}/end`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-        });
+      const response = await fetch(`/api/session/${sessionId}/end`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
 
-        const data = await response.json();
-        setSummary(data.summary);
-      } else {
-        // Mock summary
-        const completed = tasks.filter((t) => t.status === "completed").length;
-        setSummary(
-          `Session focused on: "${userGoal}". Completed ${completed} of ${tasks.length} tasks. ` +
-            (completed < tasks.length
-              ? `Remaining: ${tasks.filter((t) => t.status !== "completed").map((t) => t.title).join(", ")}.`
-              : "All planned tasks completed!")
-        );
-      }
-
-      setState("summary");
+      const data = await response.json();
+      setSummary(data.summary || "Session completed.");
+      setSessionState("summary");
     } catch (error) {
       console.error("Failed to end session:", error);
-      // Generate mock summary anyway
       const completed = tasks.filter((t) => t.status === "completed").length;
       setSummary(`Completed ${completed} of ${tasks.length} tasks.`);
-      setState("summary");
+      setSessionState("summary");
     } finally {
       setIsLoading(false);
     }
   }
 
-  /**
-   * Start a new session (reset state)
-   */
   function handleNewSession() {
-    setState("start");
-    setSessionId(null);
-    setTasks([]);
+    if (eventSource) {
+      eventSource.close();
+      setEventSource(null);
+    }
+    resetSession();
     setEvents([]);
-    setSummary("");
-    setUserGoal("");
+    setSelectedWorkspaceId("");
   }
 
-  // Render based on current state
-  return (
-    <div className="container">
-      <header className="header">
-        <h1>SessionPilot</h1>
-        <p>Plan and track your daily coding sessions</p>
-      </header>
+  async function handleCancelSession() {
+    // Close event source first
+    if (eventSource) {
+      eventSource.close();
+      setEventSource(null);
+    }
 
-      {state === "start" && (
+    // Call cancel API if we have a session
+    if (sessionId) {
+      try {
+        await fetch(`/api/session/${sessionId}/cancel`, { method: "POST" });
+      } catch (error) {
+        console.error("Failed to cancel session:", error);
+      }
+    }
+
+    setIsLoading(false);
+    setEvents([]);
+    resetSession();
+  }
+
+  const showTaskNav = sessionState === "session" && tasks.length > 0;
+
+  function handleOpenWorkspaceManager() {
+    // Close any active SSE connection before managing workspaces
+    // to prevent errors if a workspace with an active session is deleted
+    if (eventSource) {
+      eventSource.close();
+      setEventSource(null);
+    }
+    setShowWorkspaceManager(true);
+  }
+
+  return (
+    <AppShell
+      active="session"
+      showTaskNav={showTaskNav}
+      onManageWorkspaces={handleOpenWorkspaceManager}
+    >
+      {showWorkspaceManager && (
+        <WorkspaceManager
+          workspaces={workspaces}
+          onWorkspacesChange={loadWorkspaces}
+          onClose={() => setShowWorkspaceManager(false)}
+        />
+      )}
+
+      {sessionState === "start" && (
         <StartView
           workspaces={workspaces}
           selectedWorkspaceId={selectedWorkspaceId}
@@ -368,26 +421,43 @@ export default function HomePage() {
           focusWeights={focusWeights}
           onChangeFocusWeights={setFocusWeights}
           onStart={handleStartSession}
+          onManageWorkspaces={handleOpenWorkspaceManager}
           isLoading={isLoading}
         />
       )}
 
-      {state === "planning" && (
-        <PlanningView events={events} isLoading={isLoading} />
+      {sessionState === "planning" && (
+        <PlanningView
+          events={events}
+          isLoading={isLoading}
+          onCancel={handleCancelSession}
+        />
       )}
 
-      {state === "session" && (
+      {sessionState === "task_selection" && (
+        <TaskSelectionView
+          tasks={tasks}
+          timeBudget={timeBudget}
+          userGoal={userGoal}
+          onConfirmSelection={handleConfirmTaskSelection}
+          onRegenerate={handleRegenerateTasks}
+          isLoading={isLoading}
+        />
+      )}
+
+      {sessionState === "session" && (
         <SessionView
           tasks={tasks}
           timeBudget={timeBudget}
           userGoal={userGoal}
+          sessionStartedAt={sessionStartedAt}
           onToggleTask={handleToggleTask}
           onEndSession={handleEndSession}
           isLoading={isLoading}
         />
       )}
 
-      {state === "summary" && (
+      {sessionState === "summary" && (
         <SummaryView
           tasks={tasks}
           summary={summary}
@@ -395,340 +465,6 @@ export default function HomePage() {
           onNewSession={handleNewSession}
         />
       )}
-    </div>
-  );
-}
-
-// =============================================================================
-// View Components
-// =============================================================================
-
-interface StartViewProps {
-  workspaces: UIWorkspace[];
-  selectedWorkspaceId: string;
-  onSelectWorkspace: (id: string) => void;
-  userGoal: string;
-  onChangeGoal: (goal: string) => void;
-  timeBudget: number;
-  onChangeTimeBudget: (minutes: number) => void;
-  focusWeights: FocusWeights;
-  onChangeFocusWeights: (weights: FocusWeights) => void;
-  onStart: () => void;
-  isLoading: boolean;
-}
-
-function StartView({
-  workspaces,
-  selectedWorkspaceId,
-  onSelectWorkspace,
-  userGoal,
-  onChangeGoal,
-  timeBudget,
-  onChangeTimeBudget,
-  focusWeights,
-  onChangeFocusWeights,
-  onStart,
-  isLoading,
-}: StartViewProps) {
-  const canStart = selectedWorkspaceId && userGoal.trim().length > 0;
-
-  return (
-    <div className="card">
-      <h2 className="card-title">Start New Session</h2>
-
-      <div className="form-group">
-        <label className="form-label">Workspace</label>
-        <select
-          className="form-select"
-          value={selectedWorkspaceId}
-          onChange={(e) => onSelectWorkspace(e.target.value)}
-        >
-          <option value="">Select a workspace...</option>
-          {workspaces.map((ws) => (
-            <option key={ws.id} value={ws.id}>
-              {ws.name} ({ws.localPath})
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="form-group">
-        <label className="form-label">What are you working on today?</label>
-        <textarea
-          className="form-textarea"
-          placeholder="e.g., Implement user authentication, fix the checkout bug..."
-          value={userGoal}
-          onChange={(e) => onChangeGoal(e.target.value)}
-        />
-      </div>
-
-      <div className="form-group">
-        <label className="form-label">Time Budget: {timeBudget} minutes</label>
-        <input
-          type="range"
-          className="slider"
-          min="15"
-          max="120"
-          step="15"
-          value={timeBudget}
-          onChange={(e) => onChangeTimeBudget(Number(e.target.value))}
-        />
-      </div>
-
-      <div className="form-group">
-        <label className="form-label">Focus Areas</label>
-
-        <div className="slider-group">
-          <div className="slider-header">
-            <span className="slider-label">Bug Fixes</span>
-            <span className="slider-value">{Math.round(focusWeights.bugs * 100)}%</span>
-          </div>
-          <input
-            type="range"
-            className="slider"
-            min="0"
-            max="1"
-            step="0.1"
-            value={focusWeights.bugs}
-            onChange={(e) =>
-              onChangeFocusWeights({ ...focusWeights, bugs: Number(e.target.value) })
-            }
-          />
-        </div>
-
-        <div className="slider-group">
-          <div className="slider-header">
-            <span className="slider-label">New Features</span>
-            <span className="slider-value">{Math.round(focusWeights.features * 100)}%</span>
-          </div>
-          <input
-            type="range"
-            className="slider"
-            min="0"
-            max="1"
-            step="0.1"
-            value={focusWeights.features}
-            onChange={(e) =>
-              onChangeFocusWeights({ ...focusWeights, features: Number(e.target.value) })
-            }
-          />
-        </div>
-
-        <div className="slider-group">
-          <div className="slider-header">
-            <span className="slider-label">Refactoring</span>
-            <span className="slider-value">{Math.round(focusWeights.refactor * 100)}%</span>
-          </div>
-          <input
-            type="range"
-            className="slider"
-            min="0"
-            max="1"
-            step="0.1"
-            value={focusWeights.refactor}
-            onChange={(e) =>
-              onChangeFocusWeights({ ...focusWeights, refactor: Number(e.target.value) })
-            }
-          />
-        </div>
-      </div>
-
-      <button
-        className="btn btn-primary btn-full mt-2"
-        onClick={onStart}
-        disabled={!canStart || isLoading}
-      >
-        {isLoading ? "Starting..." : "Start Session"}
-      </button>
-    </div>
-  );
-}
-
-interface PlanningViewProps {
-  events: string[];
-  isLoading: boolean;
-}
-
-function PlanningView({ events, isLoading }: PlanningViewProps) {
-  return (
-    <div className="card">
-      <div className="flex justify-between items-center mb-2">
-        <h2 className="card-title" style={{ marginBottom: 0 }}>
-          Planning Session
-        </h2>
-        <span className="badge badge-planning">
-          {isLoading ? "Scanning..." : "Ready"}
-        </span>
-      </div>
-
-      {isLoading && (
-        <div className="progress-bar">
-          <div
-            className="progress-fill"
-            style={{ width: "60%", animation: "pulse 1.5s infinite" }}
-          />
-        </div>
-      )}
-
-      <div className="events-log">
-        {events.length === 0 ? (
-          <div className="event-item">Connecting to session...</div>
-        ) : (
-          events.map((event, i) => (
-            <div key={i} className="event-item">
-              {event}
-            </div>
-          ))
-        )}
-      </div>
-
-      <p className="text-muted text-sm mt-2">
-        Scanning your codebase and GitHub for signals...
-      </p>
-    </div>
-  );
-}
-
-interface SessionViewProps {
-  tasks: UITask[];
-  timeBudget: number;
-  userGoal: string;
-  onToggleTask: (taskId: string) => void;
-  onEndSession: () => void;
-  isLoading: boolean;
-}
-
-function SessionView({
-  tasks,
-  timeBudget,
-  userGoal,
-  onToggleTask,
-  onEndSession,
-  isLoading,
-}: SessionViewProps) {
-  const completedCount = tasks.filter((t) => t.status === "completed").length;
-  const progress = tasks.length > 0 ? (completedCount / tasks.length) * 100 : 0;
-
-  return (
-    <div>
-      <div className="card">
-        <div className="flex justify-between items-center mb-2">
-          <h2 className="card-title" style={{ marginBottom: 0 }}>
-            Session Active
-          </h2>
-          <span className="badge badge-active">In Progress</span>
-        </div>
-
-        <p className="text-muted text-sm mb-2">Goal: {userGoal}</p>
-
-        <div className="progress-bar">
-          <div className="progress-fill" style={{ width: `${progress}%` }} />
-        </div>
-
-        <p className="text-sm text-muted">
-          {completedCount} of {tasks.length} tasks completed • {timeBudget} min budget
-        </p>
-      </div>
-
-      <div className="card">
-        <h3 className="card-title">Tasks</h3>
-
-        <ul className="task-list">
-          {tasks.map((task) => (
-            <li key={task.id} className="task-item">
-              <input
-                type="checkbox"
-                className="task-checkbox"
-                checked={task.status === "completed"}
-                onChange={() => onToggleTask(task.id)}
-              />
-              <div className="task-content">
-                <div
-                  className={`task-title ${task.status === "completed" ? "completed" : ""}`}
-                >
-                  {task.title}
-                </div>
-                {task.description && (
-                  <div className="task-description">{task.description}</div>
-                )}
-              </div>
-              {task.estimatedMinutes && (
-                <span className="task-time">{task.estimatedMinutes} min</span>
-              )}
-            </li>
-          ))}
-        </ul>
-
-        {tasks.length === 0 && (
-          <p className="text-muted text-center">No tasks generated</p>
-        )}
-      </div>
-
-      <button
-        className="btn btn-success btn-full mt-2"
-        onClick={onEndSession}
-        disabled={isLoading}
-      >
-        {isLoading ? "Ending..." : "End Session"}
-      </button>
-    </div>
-  );
-}
-
-interface SummaryViewProps {
-  tasks: UITask[];
-  summary: string;
-  userGoal: string;
-  onNewSession: () => void;
-}
-
-function SummaryView({ tasks, summary, userGoal, onNewSession }: SummaryViewProps) {
-  const completedCount = tasks.filter((t) => t.status === "completed").length;
-  const totalMinutes = tasks.reduce((sum, t) => sum + (t.estimatedMinutes || 0), 0);
-
-  return (
-    <div>
-      <div className="card">
-        <div className="flex justify-between items-center mb-2">
-          <h2 className="card-title" style={{ marginBottom: 0 }}>
-            Session Complete
-          </h2>
-          <span className="badge badge-completed">Done</span>
-        </div>
-
-        <p className="text-muted text-sm mb-2">Goal: {userGoal}</p>
-
-        <div className="summary-box">
-          <div className="summary-stat">
-            <span className="summary-label">Tasks Completed</span>
-            <span className="summary-value">
-              {completedCount} / {tasks.length}
-            </span>
-          </div>
-          <div className="summary-stat">
-            <span className="summary-label">Time Allocated</span>
-            <span className="summary-value">{totalMinutes} min</span>
-          </div>
-          <div className="summary-stat">
-            <span className="summary-label">Completion Rate</span>
-            <span className="summary-value">
-              {tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0}%
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <h3 className="card-title">Summary for Tomorrow</h3>
-        <p className="text-sm">{summary}</p>
-        <p className="text-muted text-sm mt-2">
-          This summary will be shown at the start of your next session.
-        </p>
-      </div>
-
-      <button className="btn btn-primary btn-full mt-2" onClick={onNewSession}>
-        Start New Session
-      </button>
-    </div>
+    </AppShell>
   );
 }
