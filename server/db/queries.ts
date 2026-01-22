@@ -1,10 +1,11 @@
-import { eq } from "drizzle-orm";
+import { eq, desc, gt, and } from "drizzle-orm";
 import { getDb, initializeDb } from "./client";
 import {
   workspaces,
   sessions,
   sessionTasks,
   signals,
+  sessionEvents,
   type Workspace,
   type NewWorkspace,
   type Session,
@@ -13,6 +14,8 @@ import {
   type NewSessionTask,
   type Signal,
   type NewSignal,
+  type SessionEvent,
+  type NewSessionEvent,
 } from "./schema";
 
 // Flag to track initialization
@@ -68,31 +71,58 @@ export async function createWorkspace(data: NewWorkspace): Promise<Workspace> {
 
 /**
  * Update an existing workspace
- *
- * TODO(SessionPilot): Implement workspace update logic.
- * Should update name, localPath, and/or githubRepo fields.
- * Remember to update the updatedAt timestamp.
  */
 export async function updateWorkspace(
   id: string,
-  _data: Partial<Omit<NewWorkspace, "id" | "createdAt">>
+  data: Partial<Omit<NewWorkspace, "id" | "createdAt">>
 ): Promise<Workspace | undefined> {
-  // TODO(SessionPilot): Implement update query using drizzle
-  // await db.update(workspaces).set({ ...data, updatedAt: new Date() }).where(eq(workspaces.id, id));
-  const existing = await getWorkspace(id);
-  return existing;
+  await ensureInitialized();
+  const db = getDb();
+  await db
+    .update(workspaces)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(workspaces.id, id));
+  return getWorkspace(id);
 }
 
 /**
- * Delete a workspace
+ * Delete a workspace and all associated data (cascade delete)
  *
- * TODO(SessionPilot): Implement workspace deletion.
- * Consider cascading deletes for associated sessions.
+ * This deletes in order to respect foreign key constraints:
+ * 1. Session events (references sessions)
+ * 2. Session tasks (references sessions)
+ * 3. Signals (references sessions)
+ * 4. Sessions (references workspace)
+ * 5. Workspace
  */
-export async function deleteWorkspace(_id: string): Promise<boolean> {
-  // TODO(SessionPilot): Implement delete query
-  // await db.delete(workspaces).where(eq(workspaces.id, id));
-  return false;
+export async function deleteWorkspace(id: string): Promise<boolean> {
+  await ensureInitialized();
+  const db = getDb();
+
+  // Get all sessions for this workspace
+  const workspaceSessions = await db
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(eq(sessions.workspaceId, id));
+
+  const sessionIds = workspaceSessions.map((s) => s.id);
+
+  // Delete related data for each session
+  for (const sessionId of sessionIds) {
+    // Delete session events
+    await db.delete(sessionEvents).where(eq(sessionEvents.sessionId, sessionId));
+    // Delete session tasks
+    await db.delete(sessionTasks).where(eq(sessionTasks.sessionId, sessionId));
+    // Delete signals
+    await db.delete(signals).where(eq(signals.sessionId, sessionId));
+  }
+
+  // Delete all sessions for this workspace
+  await db.delete(sessions).where(eq(sessions.workspaceId, id));
+
+  // Finally delete the workspace
+  const result = await db.delete(workspaces).where(eq(workspaces.id, id));
+  return (result.rowsAffected ?? 0) > 0;
 }
 
 // =============================================================================
@@ -177,17 +207,22 @@ export async function endSession(
 /**
  * Get the most recent session summary for a workspace
  *
- * TODO(SessionPilot): Implement query to fetch the last completed session's summary.
- * This is used to provide context for the next session planning.
+ * Returns the summary from the last completed session for the given workspace.
+ * Used to provide context for the next session planning.
  */
 export async function getLastSessionSummary(
-  _workspaceId: string
+  workspaceId: string
 ): Promise<string | null> {
-  // TODO(SessionPilot): Query for most recent completed session
-  // SELECT summary FROM sessions
-  // WHERE workspace_id = ? AND status = 'completed'
-  // ORDER BY ended_at DESC LIMIT 1
-  return null;
+  await ensureInitialized();
+  const db = getDb();
+  const result = await db
+    .select({ summary: sessions.summary })
+    .from(sessions)
+    .where(eq(sessions.workspaceId, workspaceId))
+    .orderBy(desc(sessions.endedAt))
+    .limit(1);
+
+  return result[0]?.summary ?? null;
 }
 
 // =============================================================================
@@ -230,7 +265,9 @@ export async function listSessionTasks(sessionId: string): Promise<SessionTask[]
 export async function updateTaskStatus(
   taskId: string,
   status: SessionTask["status"],
-  notes?: string
+  notes?: string,
+  checklist?: string | null,
+  context?: string | null
 ): Promise<SessionTask | undefined> {
   await ensureInitialized();
   const db = getDb();
@@ -238,6 +275,14 @@ export async function updateTaskStatus(
 
   if (notes !== undefined) {
     updates.notes = notes;
+  }
+
+  if (checklist !== undefined) {
+    updates.checklist = checklist;
+  }
+
+  if (context !== undefined) {
+    updates.context = context;
   }
 
   if (status === "completed") {
@@ -322,4 +367,81 @@ export async function getHighPrioritySignals(
   // TODO(SessionPilot): Add priority filtering
   // WHERE priority >= minPriority ORDER BY priority DESC
   return getSessionSignals(sessionId);
+}
+
+// =============================================================================
+// Session Event Queries
+// =============================================================================
+
+/**
+ * Store a session event
+ */
+export async function storeSessionEvent(
+  sessionId: string,
+  eventType: string,
+  eventData: unknown
+): Promise<SessionEvent> {
+  await ensureInitialized();
+  const db = getDb();
+
+  const data: NewSessionEvent = {
+    sessionId,
+    eventType,
+    eventData: JSON.stringify(eventData),
+    createdAt: new Date(),
+  };
+
+  const result = await db.insert(sessionEvents).values(data).returning();
+  return result[0];
+}
+
+/**
+ * Get session events after a given ID (for polling)
+ */
+export async function getSessionEventsAfter(
+  sessionId: string,
+  afterId: number = 0
+): Promise<SessionEvent[]> {
+  await ensureInitialized();
+  const db = getDb();
+
+  const result = await db
+    .select()
+    .from(sessionEvents)
+    .where(
+      and(
+        eq(sessionEvents.sessionId, sessionId),
+        gt(sessionEvents.id, afterId)
+      )
+    )
+    .orderBy(sessionEvents.id);
+
+  return result;
+}
+
+/**
+ * Get all session events
+ */
+export async function getAllSessionEvents(
+  sessionId: string
+): Promise<SessionEvent[]> {
+  await ensureInitialized();
+  const db = getDb();
+
+  const result = await db
+    .select()
+    .from(sessionEvents)
+    .where(eq(sessionEvents.sessionId, sessionId))
+    .orderBy(sessionEvents.id);
+
+  return result;
+}
+
+/**
+ * Delete session events (for cleanup)
+ */
+export async function deleteSessionEvents(sessionId: string): Promise<void> {
+  await ensureInitialized();
+  const db = getDb();
+  await db.delete(sessionEvents).where(eq(sessionEvents.sessionId, sessionId));
 }

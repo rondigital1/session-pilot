@@ -19,7 +19,7 @@ export interface FocusWeights {
 // Session State Machine
 // =============================================================================
 
-export type SessionState = "start" | "planning" | "session" | "summary";
+export type SessionState = "start" | "planning" | "task_selection" | "session" | "summary";
 
 export type SessionStatus = "planning" | "active" | "completed" | "cancelled";
 
@@ -31,7 +31,7 @@ export type TaskStatus = "pending" | "in_progress" | "completed" | "skipped";
 
 export interface CreateWorkspaceRequest {
   name: string;
-  localPath: string;
+  localPath?: string;
   githubRepo?: string;
 }
 
@@ -51,11 +51,15 @@ export interface CreateTaskRequest {
   title: string;
   description?: string;
   estimatedMinutes?: number;
+  checklist?: UITaskChecklistItem[];
+  context?: UITaskContext;
 }
 
 export interface UpdateTaskRequest {
   status: TaskStatus;
   notes?: string;
+  checklist?: UITaskChecklistItem[];
+  context?: UITaskContext;
 }
 
 export interface EndSessionRequest {
@@ -69,11 +73,18 @@ export interface EndSessionResponse {
   tasksTotal: number;
 }
 
+export interface CancelSessionResponse {
+  sessionId: string;
+  cancelled: boolean;
+}
+
 // =============================================================================
 // SSE Event Types
 // =============================================================================
 
 export type SSEEventType =
+  | "connected"
+  | "heartbeat"
   | "scan_started"
   | "scan_progress"
   | "scan_completed"
@@ -83,6 +94,8 @@ export type SSEEventType =
   | "session_started"
   | "task_updated"
   | "session_ended"
+  | "session_timeout"
+  | "timer_warning"
   | "error";
 
 export interface SSEEvent {
@@ -118,6 +131,24 @@ export interface ErrorEvent extends SSEEvent {
   };
 }
 
+export interface SessionTimeoutEvent extends SSEEvent {
+  type: "session_timeout";
+  data: {
+    sessionId: string;
+    elapsedMinutes: number;
+    budgetMinutes: number;
+  };
+}
+
+export interface TimerWarningEvent extends SSEEvent {
+  type: "timer_warning";
+  data: {
+    sessionId: string;
+    remainingMinutes: number;
+    warningType: "ten_minute" | "five_minute";
+  };
+}
+
 // =============================================================================
 // Signal Types (from scanners)
 // =============================================================================
@@ -128,6 +159,7 @@ export type SignalType =
   | "todo_comment" // TODO/FIXME in code
   | "open_issue" // GitHub issue
   | "open_pr" // GitHub PR awaiting review
+  | "pr_review_comment" // PR review comment needing action
   | "recent_commit" // Recent commit that might need follow-up
   | "failing_test" // Test that's currently failing
   | "lint_error" // Linting issues
@@ -175,8 +207,25 @@ export interface SessionPlan {
 export interface UIWorkspace {
   id: string;
   name: string;
-  localPath: string;
-  githubRepo?: string;
+  localPath?: string | null;
+  githubRepo?: string | null;
+}
+
+export interface UITaskChecklistItem {
+  id: string;
+  title: string;
+  done?: boolean;
+}
+
+export interface UITaskContextLink {
+  label: string;
+  url: string;
+}
+
+export interface UITaskContext {
+  files?: string[];
+  relatedIssues?: string[];
+  links?: UITaskContextLink[];
 }
 
 export interface UITask {
@@ -186,6 +235,8 @@ export interface UITask {
   estimatedMinutes?: number;
   status: TaskStatus;
   notes?: string;
+  checklist?: UITaskChecklistItem[];
+  context?: UITaskContext;
 }
 
 export interface UISession {
