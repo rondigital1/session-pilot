@@ -1361,3 +1361,34 @@ a {
 .shell-nav button.nav-link:hover {
   color: var(--text);
 }
+
+/* Add Task Form */
+.add-task-section {
+  margin-top: 1rem;
+  padding: 1.25rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  animation: panel-in 0.35s ease both;
+}
+
+.add-task-header {
+  margin-bottom: 1rem;
+}
+
+.add-task-header h4 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.add-task-form .form-group {
+  margin-bottom: 1rem;
+}
+
+.add-task-form .form-textarea {
+  min-height: 80px;
+}
+
+.add-task-btn {
+  margin-top: 1rem;
+}

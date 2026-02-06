@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
-import type { UITask } from "@/server/types/domain";
+import type { CreateTaskRequest, UITask } from "@/server/types/domain";
+import AddTaskForm from "./AddTaskForm";
 
 interface TaskSelectionViewProps {
   tasks: UITask[];
@@ -7,6 +8,7 @@ interface TaskSelectionViewProps {
   userGoal: string;
   onConfirmSelection: (selectedTaskIds: string[]) => void;
   onRegenerate: () => void;
+  onAddTask: (task: CreateTaskRequest) => Promise<UITask | null>;
   isLoading: boolean;
 }
 
@@ -16,11 +18,14 @@ export default function TaskSelectionView({
   userGoal,
   onConfirmSelection,
   onRegenerate,
+  onAddTask,
   isLoading,
 }: TaskSelectionViewProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(
     () => new Set(tasks.map((t) => t.id))
   );
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [isAddingTask, setIsAddingTask] = useState(false);
 
   const selectedTasks = useMemo(
     () => tasks.filter((t) => selectedIds.has(t.id)),
@@ -56,6 +61,19 @@ export default function TaskSelectionView({
 
   function handleConfirm() {
     onConfirmSelection(Array.from(selectedIds));
+  }
+
+  async function handleAddTask(payload: CreateTaskRequest) {
+    setIsAddingTask(true);
+    try {
+      const newTask = await onAddTask(payload);
+      if (newTask) {
+        setSelectedIds((prev) => new Set([...prev, newTask.id]));
+        setShowAddForm(false);
+      }
+    } finally {
+      setIsAddingTask(false);
+    }
   }
 
   return (
@@ -130,8 +148,30 @@ export default function TaskSelectionView({
             })}
           </ul>
 
-          {tasks.length === 0 && (
+          {tasks.length === 0 && !showAddForm && (
             <p className="text-muted text-center">No tasks generated</p>
+          )}
+
+          {showAddForm ? (
+            <div className="add-task-section">
+              <div className="add-task-header">
+                <h4>Add custom task</h4>
+              </div>
+              <AddTaskForm
+                onSubmit={handleAddTask}
+                onCancel={() => setShowAddForm(false)}
+                isLoading={isAddingTask}
+              />
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-outline btn-full add-task-btn"
+              onClick={() => setShowAddForm(true)}
+              disabled={isLoading}
+            >
+              + Add custom task
+            </button>
           )}
         </section>
 

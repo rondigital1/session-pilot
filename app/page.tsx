@@ -48,6 +48,7 @@ export default function HomePage() {
     sessionStartedAt,
     setSessionStartedAt,
     syncTasksFromApi,
+    createTaskFromApi,
     patchTask,
     resetSession,
   } = useSession();
@@ -441,6 +442,7 @@ export default function HomePage() {
           userGoal={userGoal}
           onConfirmSelection={handleConfirmTaskSelection}
           onRegenerate={handleRegenerateTasks}
+          onAddTask={createTaskFromApi}
           isLoading={isLoading}
         />
       )}
@@ -452,6 +454,7 @@ export default function HomePage() {
           userGoal={userGoal}
           sessionStartedAt={sessionStartedAt}
           onToggleTask={handleToggleTask}
+          onAddTask={createTaskFromApi}
           onEndSession={handleEndSession}
           isLoading={isLoading}
         />

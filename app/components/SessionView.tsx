@@ -1,7 +1,9 @@
+import { useState } from "react";
 import type { CSSProperties } from "react";
 import Link from "next/link";
-import type { UITask } from "@/server/types/domain";
+import type { CreateTaskRequest, UITask } from "@/server/types/domain";
 import SessionTimer from "./SessionTimer";
+import AddTaskForm from "./AddTaskForm";
 
 interface SessionViewProps {
   tasks: UITask[];
@@ -9,6 +11,7 @@ interface SessionViewProps {
   userGoal: string;
   sessionStartedAt: string | null;
   onToggleTask: (taskId: string) => void;
+  onAddTask: (task: CreateTaskRequest) => Promise<UITask | null>;
   onEndSession: () => void;
   isLoading: boolean;
 }
@@ -28,12 +31,28 @@ export default function SessionView({
   userGoal,
   sessionStartedAt,
   onToggleTask,
+  onAddTask,
   onEndSession,
   isLoading,
 }: SessionViewProps) {
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [isAddingTask, setIsAddingTask] = useState(false);
+
   const completedCount = tasks.filter((t) => t.status === "completed").length;
   const progress = tasks.length > 0 ? (completedCount / tasks.length) * 100 : 0;
   const ringStyle = { "--progress": `${progress}%` } as CSSProperties;
+
+  async function handleAddTask(payload: CreateTaskRequest) {
+    setIsAddingTask(true);
+    try {
+      const newTask = await onAddTask(payload);
+      if (newTask) {
+        setShowAddForm(false);
+      }
+    } finally {
+      setIsAddingTask(false);
+    }
+  }
 
   return (
     <div className="stack">
@@ -107,8 +126,30 @@ export default function SessionView({
             })}
           </ul>
 
-          {tasks.length === 0 && (
-            <p className="text-muted text-center">No tasks generated</p>
+          {tasks.length === 0 && !showAddForm && (
+            <p className="text-muted text-center">No tasks yet</p>
+          )}
+
+          {showAddForm ? (
+            <div className="add-task-section">
+              <div className="add-task-header">
+                <h4>Add custom task</h4>
+              </div>
+              <AddTaskForm
+                onSubmit={handleAddTask}
+                onCancel={() => setShowAddForm(false)}
+                isLoading={isAddingTask}
+              />
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-outline btn-full add-task-btn"
+              onClick={() => setShowAddForm(true)}
+              disabled={isLoading}
+            >
+              + Add task
+            </button>
           )}
         </section>
 
