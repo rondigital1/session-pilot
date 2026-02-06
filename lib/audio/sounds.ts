@@ -4,6 +4,7 @@
  * These are simple synthesized sounds inspired by PS1 era UI sounds:
  * - Warning: A two-tone ascending beep
  * - Timeout: A dramatic descending chime sequence
+ * - Session complete: A bright ascending success arpeggio
  */
 
 let audioContext: AudioContext | null = null;
@@ -99,6 +100,55 @@ export function playTimeoutSound(): void {
     bassGain.connect(ctx.destination);
     bass.start(now + 0.45);
     bass.stop(now + 1);
+  } catch {
+    // Audio context may not be available
+  }
+}
+
+/**
+ * Play a PS1-style session completion sound (ascending success arpeggio)
+ */
+export function playSessionCompleteSound(): void {
+  try {
+    const ctx = getAudioContext();
+    const now = ctx.currentTime;
+
+    const notes = [
+      { freq: 523.25, time: 0, duration: 0.16 },   // C5
+      { freq: 659.25, time: 0.11, duration: 0.16 }, // E5
+      { freq: 783.99, time: 0.22, duration: 0.16 }, // G5
+      { freq: 1046.5, time: 0.33, duration: 0.3 },  // C6
+    ];
+
+    notes.forEach(({ freq, time, duration }) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, now + time);
+
+      gain.gain.setValueAtTime(0, now + time);
+      gain.gain.linearRampToValueAtTime(0.18, now + time + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + time + duration);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now + time);
+      osc.stop(now + time + duration);
+    });
+
+    // Soft harmonic tail for a polished finish.
+    const tail = ctx.createOscillator();
+    const tailGain = ctx.createGain();
+    tail.type = "sine";
+    tail.frequency.setValueAtTime(1318.51, now + 0.4); // E6
+    tailGain.gain.setValueAtTime(0.07, now + 0.4);
+    tailGain.gain.exponentialRampToValueAtTime(0.01, now + 0.95);
+    tail.connect(tailGain);
+    tailGain.connect(ctx.destination);
+    tail.start(now + 0.4);
+    tail.stop(now + 0.95);
   } catch {
     // Audio context may not be available
   }

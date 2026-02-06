@@ -14,12 +14,14 @@
 export {
   generateSessionPlan,
   generateSummary,
+  generateTaskChecklist,
 } from "./sessionPlanner";
 export type {
   PlannerSignal,
   FocusWeights,
   PlanOptions,
   SummaryOptions,
+  ChecklistOptions,
   PlannedTask,
 } from "./sessionPlanner";
 

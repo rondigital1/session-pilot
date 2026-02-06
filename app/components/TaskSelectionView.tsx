@@ -1,5 +1,9 @@
 import { useState, useMemo } from "react";
-import type { CreateTaskRequest, UITask } from "@/server/types/domain";
+import type {
+  CreateTaskRequest,
+  GenerateChecklistRequest,
+  UITask,
+} from "@/server/types/domain";
 import AddTaskForm from "./AddTaskForm";
 
 interface TaskSelectionViewProps {
@@ -9,6 +13,7 @@ interface TaskSelectionViewProps {
   onConfirmSelection: (selectedTaskIds: string[]) => void;
   onRegenerate: () => void;
   onAddTask: (task: CreateTaskRequest) => Promise<UITask | null>;
+  onGenerateChecklist: (payload: GenerateChecklistRequest) => Promise<string[]>;
   isLoading: boolean;
 }
 
@@ -19,6 +24,7 @@ export default function TaskSelectionView({
   onConfirmSelection,
   onRegenerate,
   onAddTask,
+  onGenerateChecklist,
   isLoading,
 }: TaskSelectionViewProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(
@@ -159,6 +165,7 @@ export default function TaskSelectionView({
               </div>
               <AddTaskForm
                 onSubmit={handleAddTask}
+                onGenerateChecklist={onGenerateChecklist}
                 onCancel={() => setShowAddForm(false)}
                 isLoading={isAddingTask}
               />

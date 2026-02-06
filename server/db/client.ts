@@ -1,12 +1,69 @@
 import { createClient } from "@libsql/client";
 import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
+import { createHash } from "crypto";
+import { readFile } from "fs/promises";
 import * as path from "path";
 import * as schema from "./schema";
 
 // Database singleton
 let dbInstance: ReturnType<typeof drizzle> | null = null;
 let clientInstance: ReturnType<typeof createClient> | null = null;
+
+type MigrationJournalEntry = {
+  idx: number;
+  version: string;
+  when: number;
+  tag: string;
+  breakpoints: boolean;
+};
+
+async function readMigrationJournalEntries(): Promise<MigrationJournalEntry[]> {
+  const journalPath = path.join(process.cwd(), "drizzle", "meta", "_journal.json");
+  const journalContent = await readFile(journalPath, "utf-8");
+  const journal = JSON.parse(journalContent) as { entries?: MigrationJournalEntry[] };
+  return journal.entries ?? [];
+}
+
+async function readMigrationSql(tag: string): Promise<string> {
+  const migrationPath = path.join(process.cwd(), "drizzle", `${tag}.sql`);
+  return readFile(migrationPath, "utf-8");
+}
+
+function migrationCreatesTable(migrationSql: string, tableName: string): boolean {
+  const createTableRegex = new RegExp(
+    `\\bCREATE\\s+TABLE\\s+[\`"]?${tableName}[\`"]?\\b`,
+    "i"
+  );
+  return createTableRegex.test(migrationSql);
+}
+
+async function markMigrationApplied(
+  client: ReturnType<typeof createClient>,
+  entry: MigrationJournalEntry
+) {
+  const migrationSql = await readMigrationSql(entry.tag);
+  const hash = createHash("sha256").update(migrationSql).digest("hex");
+
+  await client.execute({
+    sql: "INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)",
+    args: [hash, entry.when],
+  });
+}
+
+function toNumber(value: unknown): number {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  return 0;
+}
 
 /**
  * Get or create the database connection
@@ -73,13 +130,6 @@ async function ensureSchemaUpToDate(client: ReturnType<typeof createClient>) {
     schemaUpdated = true;
   }
 
-  // Create indexes if they don't exist (idempotent operation)
-  await client.executeMultiple(`
-    CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id);
-    CREATE INDEX IF NOT EXISTS idx_tasks_session ON session_tasks(session_id);
-    CREATE INDEX IF NOT EXISTS idx_signals_session ON signals(session_id);
-  `);
-
   // Check if Drizzle migrations table exists and has entries
   const drizzleTable = await client.execute(
     "SELECT name FROM sqlite_master WHERE type='table' AND name='__drizzle_migrations'"
@@ -99,31 +149,95 @@ async function ensureSchemaUpToDate(client: ReturnType<typeof createClient>) {
 
   // Check if any migrations are recorded
   const migrations = await client.execute("SELECT COUNT(*) as count FROM __drizzle_migrations");
-  const migrationCount = migrations.rows[0]?.count as number;
+  const migrationCount = toNumber(migrations.rows[0]?.count);
+
+  // Add session_summaries table if missing for legacy DBs without migration tracking.
+  // If migrations already exist, let Drizzle apply the pending migration normally.
+  const summariesTable = await client.execute(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='session_summaries'"
+  );
+  let hasSessionSummariesTable = summariesTable.rows.length > 0;
+  if (!hasSessionSummariesTable && migrationCount === 0) {
+    await client.executeMultiple(`
+      CREATE TABLE session_summaries (
+        id TEXT PRIMARY KEY NOT NULL,
+        session_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        tasks_completed INTEGER NOT NULL,
+        tasks_total INTEGER NOT NULL,
+        tasks_pending INTEGER NOT NULL,
+        tasks_skipped INTEGER NOT NULL,
+        completion_rate REAL NOT NULL,
+        total_estimated_minutes INTEGER NOT NULL,
+        actual_duration_minutes INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON UPDATE no action ON DELETE no action,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON UPDATE no action ON DELETE no action
+      );
+    `);
+    console.log("Schema update: Added session_summaries table");
+    hasSessionSummariesTable = true;
+    schemaUpdated = true;
+  }
+
+  // Create indexes if they don't exist (idempotent operation)
+  await client.executeMultiple(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_session ON session_tasks(session_id);
+    CREATE INDEX IF NOT EXISTS idx_signals_session ON signals(session_id);
+  `);
+  if (hasSessionSummariesTable) {
+    await client.executeMultiple(`
+      CREATE INDEX IF NOT EXISTS idx_session_summaries_session ON session_summaries(session_id);
+      CREATE INDEX IF NOT EXISTS idx_session_summaries_workspace ON session_summaries(workspace_id);
+      CREATE INDEX IF NOT EXISTS idx_session_summaries_created ON session_summaries(created_at);
+    `);
+  }
 
   if (migrationCount === 0) {
     // Mark initial migration as applied since tables already exist
-    const fs = await import("fs/promises");
-    const journalPath = path.join(process.cwd(), "drizzle", "meta", "_journal.json");
-
     try {
-      const journalContent = await fs.readFile(journalPath, "utf-8");
-      const journal = JSON.parse(journalContent);
-
+      const entries = await readMigrationJournalEntries();
       // Mark all existing migrations as applied
-      for (const entry of journal.entries) {
-        const migrationPath = path.join(process.cwd(), "drizzle", `${entry.tag}.sql`);
-        const migrationContent = await fs.readFile(migrationPath, "utf-8");
-
-        await client.execute({
-          sql: "INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)",
-          args: [migrationContent, entry.when],
-        });
+      for (const entry of entries) {
+        await markMigrationApplied(client, entry);
         console.log(`Schema update: Marked migration ${entry.tag} as applied`);
       }
       schemaUpdated = true;
     } catch (error) {
       console.error("Warning: Could not read migration journal:", error);
+    }
+  } else if (hasSessionSummariesTable) {
+    // Backfill migration record when session_summaries was created manually in a prior release.
+    try {
+      const [entries, appliedRows] = await Promise.all([
+        readMigrationJournalEntries(),
+        client.execute("SELECT created_at FROM __drizzle_migrations"),
+      ]);
+
+      const appliedMigrationTimestamps = new Set(
+        appliedRows.rows.map((row) => toNumber(row.created_at))
+      );
+      for (const entry of entries) {
+        if (appliedMigrationTimestamps.has(entry.when)) {
+          continue;
+        }
+
+        const migrationSql = await readMigrationSql(entry.tag);
+        if (!migrationCreatesTable(migrationSql, "session_summaries")) {
+          continue;
+        }
+
+        await markMigrationApplied(client, entry);
+        console.log(
+          `Schema update: Backfilled migration ${entry.tag} as applied (session_summaries already exists)`
+        );
+        schemaUpdated = true;
+        break;
+      }
+    } catch (error) {
+      console.error("Warning: Could not backfill migration records:", error);
     }
   }
 

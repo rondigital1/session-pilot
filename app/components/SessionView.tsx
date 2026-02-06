@@ -1,7 +1,11 @@
 import { useState } from "react";
 import type { CSSProperties } from "react";
 import Link from "next/link";
-import type { CreateTaskRequest, UITask } from "@/server/types/domain";
+import type {
+  CreateTaskRequest,
+  GenerateChecklistRequest,
+  UITask,
+} from "@/server/types/domain";
 import SessionTimer from "./SessionTimer";
 import AddTaskForm from "./AddTaskForm";
 
@@ -12,6 +16,7 @@ interface SessionViewProps {
   sessionStartedAt: string | null;
   onToggleTask: (taskId: string) => void;
   onAddTask: (task: CreateTaskRequest) => Promise<UITask | null>;
+  onGenerateChecklist: (payload: GenerateChecklistRequest) => Promise<string[]>;
   onEndSession: () => void;
   isLoading: boolean;
 }
@@ -32,6 +37,7 @@ export default function SessionView({
   sessionStartedAt,
   onToggleTask,
   onAddTask,
+  onGenerateChecklist,
   onEndSession,
   isLoading,
 }: SessionViewProps) {
@@ -87,7 +93,10 @@ export default function SessionView({
             {tasks.map((task) => {
               const checklistStats = getChecklistStats(task);
               return (
-                <li key={task.id} className="task-item">
+                <li
+                  key={task.id}
+                  className={`task-item ${task.status === "completed" ? "task-item-completed" : ""}`}
+                >
                   <input
                     type="checkbox"
                     className="task-checkbox"
@@ -119,7 +128,9 @@ export default function SessionView({
                         {task.estimatedMinutes} min
                       </span>
                     )}
-                    <span className="task-link">Open</span>
+                    <span className="task-link">
+                      {task.status === "completed" ? "Completed" : "Open"}
+                    </span>
                   </div>
                 </li>
               );
@@ -137,6 +148,7 @@ export default function SessionView({
               </div>
               <AddTaskForm
                 onSubmit={handleAddTask}
+                onGenerateChecklist={onGenerateChecklist}
                 onCancel={() => setShowAddForm(false)}
                 isLoading={isAddingTask}
               />

@@ -12,6 +12,9 @@
   --accent: #f2f4f6;
   --accent-weak: #c8cdd6;
   --accent-dark: #0b0c0f;
+  --success: #7be0a2;
+  --success-bg: rgba(123, 224, 162, 0.12);
+  --success-border: rgba(123, 224, 162, 0.35);
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
   --shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
 }
@@ -378,8 +381,9 @@ a {
 }
 
 .btn-complete {
-  border-color: rgba(242, 244, 246, 0.6);
-  color: var(--accent-weak);
+  border-color: var(--success-border);
+  color: var(--success);
+  background: var(--success-bg);
 }
 
 .btn-full {
@@ -431,6 +435,16 @@ a {
 .task-item:nth-child(4) { animation-delay: 0.2s; }
 .task-item:nth-child(5) { animation-delay: 0.25s; }
 .task-item:nth-child(6) { animation-delay: 0.3s; }
+
+.task-item-completed {
+  border-color: var(--success-border);
+  background: linear-gradient(120deg, var(--success-bg), rgba(255, 255, 255, 0.02));
+}
+
+.task-item-completed .task-time,
+.task-item-completed .task-link {
+  color: var(--success);
+}
 
 .task-checkbox {
   width: 18px;
@@ -664,6 +678,11 @@ a {
   background: linear-gradient(120deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
   border: 1px solid rgba(255, 255, 255, 0.08);
   animation: panel-in 0.7s ease both;
+}
+
+.task-hero-completed {
+  border-color: var(--success-border);
+  background: linear-gradient(120deg, var(--success-bg), rgba(255, 255, 255, 0.02));
 }
 
 .task-hero-meta {

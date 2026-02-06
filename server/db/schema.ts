@@ -43,6 +43,37 @@ export const sessions = sqliteTable(
 );
 
 /**
+ * Session summaries table - snapshot of generated summaries and completion metrics
+ * Stored separately from sessions to support analytics/history queries.
+ */
+export const sessionSummaries = sqliteTable(
+  "session_summaries",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    summary: text("summary").notNull(),
+    tasksCompleted: integer("tasks_completed").notNull(),
+    tasksTotal: integer("tasks_total").notNull(),
+    tasksPending: integer("tasks_pending").notNull(),
+    tasksSkipped: integer("tasks_skipped").notNull(),
+    completionRate: real("completion_rate").notNull(),
+    totalEstimatedMinutes: integer("total_estimated_minutes").notNull(),
+    actualDurationMinutes: integer("actual_duration_minutes").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    index("idx_session_summaries_session").on(table.sessionId),
+    index("idx_session_summaries_workspace").on(table.workspaceId),
+    index("idx_session_summaries_created").on(table.createdAt),
+  ]
+);
+
+/**
  * Session tasks table - individual tasks within a session
  * Tasks are created from the planned work items
  */
@@ -119,6 +150,9 @@ export type NewWorkspace = typeof workspaces.$inferInsert;
 
 export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
+
+export type SessionSummary = typeof sessionSummaries.$inferSelect;
+export type NewSessionSummary = typeof sessionSummaries.$inferInsert;
 
 export type SessionTask = typeof sessionTasks.$inferSelect;
 export type NewSessionTask = typeof sessionTasks.$inferInsert;

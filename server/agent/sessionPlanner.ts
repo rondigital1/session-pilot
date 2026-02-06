@@ -24,7 +24,13 @@ import {
   extractTextContent,
 } from "@/lib/claude";
 import type { PlannedTask } from "@/lib/claude";
-import { getClaudeClient, isClaudeConfigured, DEFAULT_MODEL, PLANNING_MAX_TOKENS } from "./claudeClient";
+import {
+  getClaudeClient,
+  isClaudeConfigured,
+  DEFAULT_MODEL,
+  FAST_MODEL,
+  PLANNING_MAX_TOKENS,
+} from "./claudeClient";
 
 // =============================================================================
 // Types
@@ -60,6 +66,13 @@ export interface SummaryOptions {
   completedTasks: string[];
   pendingTasks: string[];
   notes: string[];
+}
+
+/** Options for checklist generation from a task description */
+export interface ChecklistOptions {
+  title?: string;
+  description: string;
+  maxItems?: number;
 }
 
 // Re-export PlannedTask for consumers
@@ -193,6 +206,121 @@ export async function generateSessionPlan(
 
   // Parse and validate the response into structured tasks
   return parsePlanningResponse(response);
+}
+
+// =============================================================================
+// Checklist Generation
+// =============================================================================
+
+const CHECKLIST_SYSTEM_PROMPT = `You convert coding task descriptions into actionable checklists.
+Return ONLY valid JSON array of short checklist strings.
+Rules:
+- 4 to 7 items unless task is very small
+- each item must be concrete and execution-focused
+- no markdown, no commentary, no numbering`;
+
+function normalizeChecklistItems(items: string[], maxItems: number): string[] {
+  const cleaned = items
+    .map((item) =>
+      item
+        .replace(/^[-*•\d.)\s]+/, "")
+        .trim()
+        .replace(/\s+/g, " ")
+    )
+    .filter((item) => item.length > 2);
+
+  const unique = Array.from(new Set(cleaned));
+  return unique.slice(0, maxItems);
+}
+
+function generateFallbackChecklist(description: string, maxItems: number): string[] {
+  const sentenceItems = description
+    .split(/[\n.!?]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const checklist = normalizeChecklistItems(sentenceItems, maxItems);
+  if (checklist.length > 0) {
+    return checklist;
+  }
+
+  return [
+    "Review task requirements and constraints",
+    "Implement the core changes",
+    "Run relevant checks or tests",
+    "Document key outcomes and follow-ups",
+  ].slice(0, maxItems);
+}
+
+function parseChecklistResponse(text: string, maxItems: number): string[] {
+  const direct = text.trim();
+  const jsonBlockMatch = direct.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const candidate = jsonBlockMatch ? jsonBlockMatch[1].trim() : direct;
+
+  try {
+    const parsed = JSON.parse(candidate);
+    if (Array.isArray(parsed)) {
+      const strings = parsed.filter((item): item is string => typeof item === "string");
+      return normalizeChecklistItems(strings, maxItems);
+    }
+  } catch {
+    // Fall through to line-based parse
+  }
+
+  const lineBased = candidate
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return normalizeChecklistItems(lineBased, maxItems);
+}
+
+/**
+ * Generate checklist items from a task description
+ */
+export async function generateTaskChecklist(
+  options: ChecklistOptions
+): Promise<string[]> {
+  const description = options.description.trim();
+  if (!description) {
+    return [];
+  }
+
+  const maxItems = Math.min(Math.max(options.maxItems ?? 6, 3), 8);
+  const fallback = generateFallbackChecklist(description, maxItems);
+
+  if (!isClaudeConfigured()) {
+    return fallback;
+  }
+
+  try {
+    const client = getClaudeClient();
+    const prompt = [
+      options.title ? `Task title: ${options.title}` : null,
+      `Task description: ${description}`,
+      `Max checklist items: ${maxItems}`,
+      "Return JSON array of checklist strings only.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const response = await client.messages.create({
+      model: FAST_MODEL,
+      max_tokens: 256,
+      system: CHECKLIST_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const text = extractTextContent(response);
+    if (!text) {
+      return fallback;
+    }
+
+    const parsed = parseChecklistResponse(text, maxItems);
+    return parsed.length > 0 ? parsed : fallback;
+  } catch (error) {
+    console.warn("[SessionPlanner] Checklist generation failed, using fallback:", error);
+    return fallback;
+  }
 }
 
 // =============================================================================

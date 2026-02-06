@@ -1,16 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import type { CreateTaskRequest, UITaskChecklistItem } from "@/server/types/domain";
+import type {
+  CreateTaskRequest,
+  GenerateChecklistRequest,
+  UITaskChecklistItem,
+} from "@/server/types/domain";
 
 interface AddTaskFormProps {
   onSubmit: (task: CreateTaskRequest) => Promise<void>;
+  onGenerateChecklist?: (payload: GenerateChecklistRequest) => Promise<string[]>;
   onCancel?: () => void;
   isLoading?: boolean;
 }
 
 export default function AddTaskForm({
   onSubmit,
+  onGenerateChecklist,
   onCancel,
   isLoading = false,
 }: AddTaskFormProps) {
@@ -18,6 +24,7 @@ export default function AddTaskForm({
   const [description, setDescription] = useState("");
   const [estimatedMinutes, setEstimatedMinutes] = useState<string>("");
   const [checklistInput, setChecklistInput] = useState("");
+  const [isGeneratingChecklist, setIsGeneratingChecklist] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function parseChecklist(input: string): UITaskChecklistItem[] {
@@ -69,6 +76,38 @@ export default function AddTaskForm({
       setChecklistInput("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create task");
+    }
+  }
+
+  async function handleGenerateChecklist() {
+    if (!onGenerateChecklist) {
+      return;
+    }
+
+    if (!description.trim()) {
+      setError("Add a task description before generating a checklist");
+      return;
+    }
+
+    setError(null);
+    setIsGeneratingChecklist(true);
+
+    try {
+      const generatedItems = await onGenerateChecklist({
+        title: title.trim() || undefined,
+        description: description.trim(),
+      });
+
+      if (generatedItems.length === 0) {
+        setError("Could not generate checklist items for this task");
+        return;
+      }
+
+      setChecklistInput(generatedItems.map((item) => `- ${item}`).join("\n"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate checklist");
+    } finally {
+      setIsGeneratingChecklist(false);
     }
   }
 
@@ -125,16 +164,28 @@ export default function AddTaskForm({
       </div>
 
       <div className="form-group">
-        <label htmlFor="task-checklist" className="form-label">
-          Checklist items
-        </label>
+        <div className="form-label-row">
+          <label htmlFor="task-checklist" className="form-label">
+            Checklist items
+          </label>
+          {onGenerateChecklist && (
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={handleGenerateChecklist}
+              disabled={isLoading || isGeneratingChecklist || !description.trim()}
+            >
+              {isGeneratingChecklist ? "Generating..." : "Generate checklist"}
+            </button>
+          )}
+        </div>
         <textarea
           id="task-checklist"
           className="form-textarea"
           placeholder="One item per line:&#10;- Review the PR&#10;- Run tests&#10;- Update docs"
           value={checklistInput}
           onChange={(e) => setChecklistInput(e.target.value)}
-          disabled={isLoading}
+          disabled={isLoading || isGeneratingChecklist}
           rows={4}
         />
         <p className="form-hint">Enter one checklist item per line</p>

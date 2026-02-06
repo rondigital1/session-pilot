@@ -1,1 +1,6 @@
-export { playWarningSound, playTimeoutSound, resumeAudioContext } from "./sounds";
+export {
+  playWarningSound,
+  playTimeoutSound,
+  playSessionCompleteSound,
+  resumeAudioContext,
+} from "./sounds";

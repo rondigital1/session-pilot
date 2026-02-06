@@ -3,8 +3,13 @@ import {
   getSession,
   endSession,
   listSessionTasks,
+  storeSessionSummary,
 } from "@/server/db/queries";
-import type { EndSessionRequest, EndSessionResponse } from "@/server/types/domain";
+import type {
+  EndSessionRequest,
+  EndSessionResponse,
+  SessionMetrics,
+} from "@/server/types/domain";
 import {
   generateTemplateSummary,
   getTasksByStatus,
@@ -74,6 +79,31 @@ export async function POST(
     const tasks = await listSessionTasks(sessionId);
     const tasksCompleted = tasks.filter((t) => t.status === "completed").length;
     const tasksTotal = tasks.length;
+    const tasksPending = tasks.filter(
+      (t) => t.status === "pending" || t.status === "in_progress"
+    ).length;
+    const tasksSkipped = tasks.filter((t) => t.status === "skipped").length;
+    const completionRate =
+      tasksTotal > 0 ? Math.round((tasksCompleted / tasksTotal) * 100) : 0;
+    const totalEstimatedMinutes = tasks.reduce(
+      (sum, task) => sum + (task.estimatedMinutes ?? 0),
+      0
+    );
+    const endedAt = new Date();
+    const actualDurationMinutes = Math.max(
+      0,
+      Math.round((endedAt.getTime() - session.startedAt.getTime()) / 60000)
+    );
+
+    const metrics: SessionMetrics = {
+      tasksCompleted,
+      tasksTotal,
+      tasksPending,
+      tasksSkipped,
+      completionRate,
+      totalEstimatedMinutes,
+      actualDurationMinutes,
+    };
 
     // Generate or use provided summary
     let summary: string;
@@ -112,11 +142,27 @@ export async function POST(
       );
     }
 
+    await storeSessionSummary({
+      id: `sum_${sessionId}`,
+      sessionId,
+      workspaceId: session.workspaceId,
+      summary,
+      tasksCompleted: metrics.tasksCompleted,
+      tasksTotal: metrics.tasksTotal,
+      tasksPending: metrics.tasksPending,
+      tasksSkipped: metrics.tasksSkipped,
+      completionRate: metrics.completionRate,
+      totalEstimatedMinutes: metrics.totalEstimatedMinutes,
+      actualDurationMinutes: metrics.actualDurationMinutes,
+      createdAt: endedAt,
+    });
+
     const response: EndSessionResponse = {
       sessionId,
       summary,
       tasksCompleted,
       tasksTotal,
+      metrics,
     };
 
     return addSecurityHeaders(NextResponse.json(response));

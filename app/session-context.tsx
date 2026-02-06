@@ -12,6 +12,8 @@ import {
 import type {
   CreateTaskRequest,
   FocusWeights,
+  GenerateChecklistRequest,
+  SessionMetrics,
   SessionState,
   TaskStatus,
   UITaskChecklistItem,
@@ -36,6 +38,7 @@ const initialSessionData = {
   focusWeights: defaultFocusWeights,
   tasks: [] as UITask[],
   summary: "",
+  sessionMetrics: null as SessionMetrics | null,
   sessionStartedAt: null as string | null,
 };
 
@@ -48,10 +51,12 @@ interface SessionContextValue extends SessionData {
   setTimeBudget: (minutes: number) => void;
   setFocusWeights: (weights: FocusWeights) => void;
   setSummary: (summary: string) => void;
+  setSessionMetrics: (metrics: SessionMetrics | null) => void;
   setTasks: Dispatch<SetStateAction<UITask[]>>;
   setSessionStartedAt: (timestamp: string | null) => void;
   syncTasksFromApi: () => Promise<void>;
   createTaskFromApi: (payload: CreateTaskRequest) => Promise<UITask | null>;
+  generateChecklistFromApi: (payload: GenerateChecklistRequest) => Promise<string[]>;
   patchTask: (taskId: string, updates: UpdateTaskRequest) => Promise<UITask | null>;
   updateTaskStatus: (taskId: string, status: TaskStatus) => void;
   toggleTaskStatus: (taskId: string) => void;
@@ -71,6 +76,21 @@ interface ApiTask {
   notes?: string | null;
   checklist?: UITaskChecklistItem[];
   context?: UITaskContext;
+}
+
+function dedupeTasksById(tasks: UITask[]): UITask[] {
+  const seen = new Set<string>();
+  const deduped: UITask[] = [];
+
+  for (const task of tasks) {
+    if (seen.has(task.id)) {
+      continue;
+    }
+    seen.add(task.id);
+    deduped.push(task);
+  }
+
+  return deduped;
 }
 
 function mapApiTask(apiTask: ApiTask, existing?: UITask): UITask {
@@ -105,7 +125,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (stored) {
       try {
         const parsed = JSON.parse(stored) as Partial<SessionData>;
-        setSessionData({ ...initialSessionData, ...parsed });
+        setSessionData({
+          ...initialSessionData,
+          ...parsed,
+          tasks: dedupeTasksById(parsed.tasks ?? []),
+        });
       } catch {
         setSessionData(initialSessionData);
       }
@@ -144,10 +168,16 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     setSessionData((prev) => ({ ...prev, summary }));
   }, []);
 
+  const setSessionMetrics = useCallback((sessionMetrics: SessionMetrics | null) => {
+    setSessionData((prev) => ({ ...prev, sessionMetrics }));
+  }, []);
+
   const setTasks = useCallback((tasks: SetStateAction<UITask[]>) => {
     setSessionData((prev) => ({
       ...prev,
-      tasks: typeof tasks === "function" ? tasks(prev.tasks) : tasks,
+      tasks: dedupeTasksById(
+        typeof tasks === "function" ? tasks(prev.tasks) : tasks
+      ),
     }));
   }, []);
 
@@ -225,7 +255,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       }
       setSessionData((prev) => ({
         ...prev,
-        tasks: mergeApiTasks(prev.tasks, data.tasks || []),
+        tasks: dedupeTasksById(mergeApiTasks(prev.tasks, data.tasks || [])),
       }));
     } catch (error) {
       console.error("Failed to sync tasks:", error);
@@ -260,12 +290,49 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         const mapped = mapApiTask(data.task);
         setSessionData((prev) => ({
           ...prev,
-          tasks: [...prev.tasks, mapped],
+          tasks: dedupeTasksById([...prev.tasks, mapped]),
         }));
         return mapped;
       } catch (error) {
         console.error("Failed to create task:", error);
         return null;
+      }
+    },
+    [sessionData.sessionId]
+  );
+
+  const generateChecklistFromApi = useCallback(
+    async (payload: GenerateChecklistRequest) => {
+      if (!sessionData.sessionId) {
+        return [];
+      }
+
+      try {
+        const response = await fetch(
+          `/api/session/${sessionData.sessionId}/task/checklist`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }
+        );
+
+        if (!response.ok) {
+          return [];
+        }
+
+        const data = (await response.json()) as { items?: string[] };
+        if (!Array.isArray(data.items)) {
+          return [];
+        }
+
+        return data.items
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+      } catch (error) {
+        console.error("Failed to generate checklist:", error);
+        return [];
       }
     },
     [sessionData.sessionId]
@@ -278,7 +345,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       }
 
       const currentTask = sessionData.tasks.find((task) => task.id === taskId);
-      const status = updates.status || currentTask?.status || "pending";
+      const status = updates.status ?? currentTask?.status ?? "pending";
 
       try {
         const response = await fetch(
@@ -289,6 +356,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             body: JSON.stringify({
               taskId,
               status,
+              title: updates.title,
+              description: updates.description,
+              estimatedMinutes: updates.estimatedMinutes,
               notes: updates.notes,
               checklist: updates.checklist,
               context: updates.context,
@@ -335,10 +405,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setTimeBudget,
       setFocusWeights,
       setSummary,
+      setSessionMetrics,
       setTasks,
       setSessionStartedAt,
       syncTasksFromApi,
       createTaskFromApi,
+      generateChecklistFromApi,
       patchTask,
       updateTaskStatus,
       toggleTaskStatus,
@@ -354,10 +426,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setTimeBudget,
       setFocusWeights,
       setSummary,
+      setSessionMetrics,
       setTasks,
       setSessionStartedAt,
       syncTasksFromApi,
       createTaskFromApi,
+      generateChecklistFromApi,
       patchTask,
       updateTaskStatus,
       toggleTaskStatus,

@@ -3,6 +3,7 @@ import { getDb, initializeDb } from "./client";
 import {
   workspaces,
   sessions,
+  sessionSummaries,
   sessionTasks,
   signals,
   sessionEvents,
@@ -10,6 +11,8 @@ import {
   type NewWorkspace,
   type Session,
   type NewSession,
+  type SessionSummary,
+  type NewSessionSummary,
   type SessionTask,
   type NewSessionTask,
   type Signal,
@@ -20,15 +23,27 @@ import {
 
 // Flag to track initialization
 let isInitialized = false;
+let initializationPromise: Promise<void> | null = null;
 
 /**
  * Ensure database is initialized before queries
  */
 async function ensureInitialized() {
-  if (!isInitialized) {
-    await initializeDb();
-    isInitialized = true;
+  if (isInitialized) {
+    return;
   }
+
+  if (!initializationPromise) {
+    initializationPromise = initializeDb()
+      .then(() => {
+        isInitialized = true;
+      })
+      .finally(() => {
+        initializationPromise = null;
+      });
+  }
+
+  await initializationPromise;
 }
 
 // =============================================================================
@@ -92,8 +107,9 @@ export async function updateWorkspace(
  * 1. Session events (references sessions)
  * 2. Session tasks (references sessions)
  * 3. Signals (references sessions)
- * 4. Sessions (references workspace)
- * 5. Workspace
+ * 4. Session summaries (references sessions/workspace)
+ * 5. Sessions (references workspace)
+ * 6. Workspace
  */
 export async function deleteWorkspace(id: string): Promise<boolean> {
   await ensureInitialized();
@@ -115,6 +131,10 @@ export async function deleteWorkspace(id: string): Promise<boolean> {
     await db.delete(sessionTasks).where(eq(sessionTasks.sessionId, sessionId));
     // Delete signals
     await db.delete(signals).where(eq(signals.sessionId, sessionId));
+    // Delete session summaries
+    await db
+      .delete(sessionSummaries)
+      .where(eq(sessionSummaries.sessionId, sessionId));
   }
 
   // Delete all sessions for this workspace
@@ -216,13 +236,32 @@ export async function getLastSessionSummary(
   await ensureInitialized();
   const db = getDb();
   const result = await db
-    .select({ summary: sessions.summary })
-    .from(sessions)
-    .where(eq(sessions.workspaceId, workspaceId))
-    .orderBy(desc(sessions.endedAt))
+    .select({ summary: sessionSummaries.summary })
+    .from(sessionSummaries)
+    .where(eq(sessionSummaries.workspaceId, workspaceId))
+    .orderBy(desc(sessionSummaries.createdAt))
     .limit(1);
 
   return result[0]?.summary ?? null;
+}
+
+/**
+ * Store a session summary snapshot with completion metrics
+ */
+export async function storeSessionSummary(
+  data: NewSessionSummary
+): Promise<SessionSummary> {
+  await ensureInitialized();
+  const db = getDb();
+  await db.insert(sessionSummaries).values(data);
+  const created = await db
+    .select()
+    .from(sessionSummaries)
+    .where(eq(sessionSummaries.id, data.id));
+  if (!created[0]) {
+    throw new Error("Failed to store session summary");
+  }
+  return created[0];
 }
 
 // =============================================================================
@@ -274,34 +313,58 @@ export async function getTask(taskId: string): Promise<SessionTask | undefined> 
   return result[0];
 }
 
+export interface UpdateSessionTaskInput {
+  status?: SessionTask["status"];
+  title?: string;
+  description?: string | null;
+  estimatedMinutes?: number | null;
+  notes?: string | null;
+  checklist?: string | null;
+  context?: string | null;
+}
+
 /**
- * Update task status
+ * Update a task with partial fields
  */
-export async function updateTaskStatus(
+export async function updateSessionTask(
   taskId: string,
-  status: SessionTask["status"],
-  notes?: string,
-  checklist?: string | null,
-  context?: string | null
+  data: UpdateSessionTaskInput
 ): Promise<SessionTask | undefined> {
   await ensureInitialized();
   const db = getDb();
-  const updates: Partial<SessionTask> = { status };
+  const updates: Partial<SessionTask> = {};
 
-  if (notes !== undefined) {
-    updates.notes = notes;
+  if (data.status !== undefined) {
+    updates.status = data.status;
+    updates.completedAt = data.status === "completed" ? new Date() : null;
   }
 
-  if (checklist !== undefined) {
-    updates.checklist = checklist;
+  if (data.title !== undefined) {
+    updates.title = data.title;
   }
 
-  if (context !== undefined) {
-    updates.context = context;
+  if (data.description !== undefined) {
+    updates.description = data.description;
   }
 
-  if (status === "completed") {
-    updates.completedAt = new Date();
+  if (data.estimatedMinutes !== undefined) {
+    updates.estimatedMinutes = data.estimatedMinutes;
+  }
+
+  if (data.notes !== undefined) {
+    updates.notes = data.notes;
+  }
+
+  if (data.checklist !== undefined) {
+    updates.checklist = data.checklist;
+  }
+
+  if (data.context !== undefined) {
+    updates.context = data.context;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return getTask(taskId);
   }
 
   await db.update(sessionTasks).set(updates).where(eq(sessionTasks.id, taskId));

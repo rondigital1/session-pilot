@@ -10,6 +10,7 @@ import SessionView from "./components/SessionView";
 import SummaryView from "./components/SummaryView";
 import WorkspaceManager from "./components/WorkspaceManager";
 import { useSession } from "./session-context";
+import { playSessionCompleteSound, resumeAudioContext } from "@/lib/audio";
 
 /**
  * SessionPilot - Single Page Application
@@ -45,10 +46,13 @@ export default function HomePage() {
     setFocusWeights,
     summary,
     setSummary,
+    sessionMetrics,
+    setSessionMetrics,
     sessionStartedAt,
     setSessionStartedAt,
     syncTasksFromApi,
     createTaskFromApi,
+    generateChecklistFromApi,
     patchTask,
     resetSession,
   } = useSession();
@@ -250,16 +254,23 @@ export default function HomePage() {
           description?: string;
           estimatedMinutes?: number;
         };
-        setTasks((prev) => [
-          ...prev,
-          {
+        setTasks((prev) => {
+          const incomingTask = {
             id: taskData.taskId,
             title: taskData.title,
             description: taskData.description,
             estimatedMinutes: taskData.estimatedMinutes,
-            status: "pending",
-          },
-        ]);
+            status: "pending" as const,
+          };
+          const existingIndex = prev.findIndex((task) => task.id === taskData.taskId);
+          if (existingIndex === -1) {
+            return [...prev, incomingTask];
+          }
+
+          const next = [...prev];
+          next[existingIndex] = { ...next[existingIndex], ...incomingTask };
+          return next;
+        });
         addEvent(`[${time}] Task: ${taskData.title}`);
         break;
       }
@@ -342,12 +353,20 @@ export default function HomePage() {
 
       const data = await response.json();
       setSummary(data.summary || "Session completed.");
+      setSessionMetrics(data.metrics || null);
       setSessionState("summary");
+      void resumeAudioContext()
+        .then(() => playSessionCompleteSound())
+        .catch(() => {});
     } catch (error) {
       console.error("Failed to end session:", error);
       const completed = tasks.filter((t) => t.status === "completed").length;
       setSummary(`Completed ${completed} of ${tasks.length} tasks.`);
+      setSessionMetrics(null);
       setSessionState("summary");
+      void resumeAudioContext()
+        .then(() => playSessionCompleteSound())
+        .catch(() => {});
     } finally {
       setIsLoading(false);
     }
@@ -443,6 +462,7 @@ export default function HomePage() {
           onConfirmSelection={handleConfirmTaskSelection}
           onRegenerate={handleRegenerateTasks}
           onAddTask={createTaskFromApi}
+          onGenerateChecklist={generateChecklistFromApi}
           isLoading={isLoading}
         />
       )}
@@ -455,6 +475,7 @@ export default function HomePage() {
           sessionStartedAt={sessionStartedAt}
           onToggleTask={handleToggleTask}
           onAddTask={createTaskFromApi}
+          onGenerateChecklist={generateChecklistFromApi}
           onEndSession={handleEndSession}
           isLoading={isLoading}
         />
@@ -464,6 +485,7 @@ export default function HomePage() {
         <SummaryView
           tasks={tasks}
           summary={summary}
+          metrics={sessionMetrics}
           userGoal={userGoal}
           onNewSession={handleNewSession}
         />

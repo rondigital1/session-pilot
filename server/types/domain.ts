@@ -56,10 +56,28 @@ export interface CreateTaskRequest {
 }
 
 export interface UpdateTaskRequest {
-  status: TaskStatus;
+  status?: TaskStatus;
+  title?: string;
+  description?: string | null;
+  estimatedMinutes?: number | null;
   notes?: string;
   checklist?: UITaskChecklistItem[];
   context?: UITaskContext;
+}
+
+export interface GenerateChecklistRequest {
+  title?: string;
+  description: string;
+}
+
+export interface SessionMetrics {
+  tasksCompleted: number;
+  tasksTotal: number;
+  tasksPending: number;
+  tasksSkipped: number;
+  completionRate: number;
+  totalEstimatedMinutes: number;
+  actualDurationMinutes: number;
 }
 
 export interface EndSessionRequest {
@@ -71,6 +89,7 @@ export interface EndSessionResponse {
   summary: string;
   tasksCompleted: number;
   tasksTotal: number;
+  metrics: SessionMetrics;
 }
 
 export interface CancelSessionResponse {
@@ -248,4 +267,5 @@ export interface UISession {
   status: SessionStatus;
   tasks: UITask[];
   summary?: string;
+  metrics?: SessionMetrics;
 }
