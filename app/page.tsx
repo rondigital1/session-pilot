@@ -12,6 +12,19 @@ import WorkspaceManager from "./components/WorkspaceManager";
 import { useSession } from "./session-context";
 import { playSessionCompleteSound, resumeAudioContext } from "@/lib/audio";
 
+const TERMINAL_PLANNING_ERROR_CODES = new Set([
+  "INVALID_WORKSPACE",
+  "PLANNING_FAILED",
+  "POLL_ERROR",
+]);
+
+function isTerminalPlanningError(code?: string): boolean {
+  if (!code) {
+    return false;
+  }
+  return TERMINAL_PLANNING_ERROR_CODES.has(code);
+}
+
 /**
  * SessionPilot - Single Page Application
  *
@@ -30,6 +43,8 @@ export default function HomePage() {
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>("");
   const [showWorkspaceManager, setShowWorkspaceManager] = useState<boolean>(false);
   const [eventSource, setEventSource] = useState<EventSource | null>(null);
+  const [planningError, setPlanningError] = useState<string | null>(null);
+  const [isPlanningStreamComplete, setIsPlanningStreamComplete] = useState(false);
 
   const {
     sessionState,
@@ -73,12 +88,17 @@ export default function HomePage() {
   // Reconnect to SSE or recover state if we're in planning state but have no connection
   // (e.g., after page reload during planning)
   useEffect(() => {
-    if (sessionId && sessionState === "planning" && !eventSource) {
+    if (
+      sessionId &&
+      sessionState === "planning" &&
+      !eventSource &&
+      !isPlanningStreamComplete
+    ) {
       console.log("[SSE Client] Reconnecting to session after page load");
       setIsLoading(true);
       connectToEvents(sessionId);
     }
-  }, [sessionId, sessionState, eventSource]);
+  }, [sessionId, sessionState, eventSource, isPlanningStreamComplete]);
   
   // If we have tasks while in planning state, planning already completed - advance to task selection
   useEffect(() => {
@@ -115,6 +135,9 @@ export default function HomePage() {
 
     setIsLoading(true);
     setEvents([]);
+    setTasks([]);
+    setPlanningError(null);
+    setIsPlanningStreamComplete(false);
     setSessionState("planning");
 
     try {
@@ -139,9 +162,11 @@ export default function HomePage() {
       connectToEvents(data.sessionId);
     } catch (error) {
       console.error("Failed to start session:", error);
+      const message = error instanceof Error ? error.message : "Unknown error";
       addEvent(
-        `Error: ${error instanceof Error ? error.message : "Unknown error"}`
+        `Error: ${message}`
       );
+      setPlanningError(message);
       setIsLoading(false);
       setSessionState("start");
     }
@@ -277,6 +302,8 @@ export default function HomePage() {
 
       case "planning_completed":
         addEvent(`[${time}] Planning complete!`);
+        setPlanningError(null);
+        setIsPlanningStreamComplete(true);
         setIsLoading(false);
         void syncTasksFromApi();
         setTimeout(() => {
@@ -285,25 +312,33 @@ export default function HomePage() {
         break;
 
       case "session_ended": {
-        const endData = event.data as { cancelled?: boolean };
+        const endData = event.data as { cancelled?: boolean; streamComplete?: boolean };
+        if (endData.streamComplete) {
+          setIsPlanningStreamComplete(true);
+          setIsLoading(false);
+        }
         if (endData.cancelled) {
           addEvent(`[${time}] Session cancelled`);
         }
         // Close event source
-        if (eventSource) {
-          eventSource.close();
-          setEventSource(null);
-        }
+        setEventSource((activeEventSource) => {
+          if (activeEventSource) {
+            activeEventSource.close();
+          }
+          return null;
+        });
         break;
       }
 
       case "error": {
         const errorData = event.data as { code?: string; message?: string };
-        addEvent(`[${time}] Error: ${errorData.message || "Unknown error"}`);
-        setIsLoading(false);
-        // If this is a critical error (like invalid workspace), allow retry
-        if (errorData.code === "INVALID_WORKSPACE" || errorData.code === "PLANNING_FAILED") {
-          // Keep in planning state to show the error, user can cancel to retry
+        const errorMessage = errorData.message || "Unknown error";
+        addEvent(`[${time}] Error: ${errorMessage}`);
+
+        if (isTerminalPlanningError(errorData.code)) {
+          setPlanningError(errorMessage);
+          setIsLoading(false);
+          setIsPlanningStreamComplete(true);
         }
         break;
       }
@@ -326,6 +361,8 @@ export default function HomePage() {
 
     setTasks([]);
     setEvents([]);
+    setPlanningError(null);
+    setIsPlanningStreamComplete(false);
     setSessionState("planning");
     setIsLoading(true);
     connectToEvents(sessionId);
@@ -379,6 +416,8 @@ export default function HomePage() {
     }
     resetSession();
     setEvents([]);
+    setPlanningError(null);
+    setIsPlanningStreamComplete(false);
     setSelectedWorkspaceId("");
   }
 
@@ -400,6 +439,8 @@ export default function HomePage() {
 
     setIsLoading(false);
     setEvents([]);
+    setPlanningError(null);
+    setIsPlanningStreamComplete(false);
     resetSession();
   }
 
@@ -450,6 +491,7 @@ export default function HomePage() {
         <PlanningView
           events={events}
           isLoading={isLoading}
+          errorMessage={planningError}
           onCancel={handleCancelSession}
         />
       )}

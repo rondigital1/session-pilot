@@ -1,10 +1,16 @@
 interface PlanningViewProps {
   events: string[];
   isLoading: boolean;
+  errorMessage?: string | null;
   onCancel?: () => void;
 }
 
-export default function PlanningView({ events, isLoading, onCancel }: PlanningViewProps) {
+export default function PlanningView({
+  events,
+  isLoading,
+  errorMessage,
+  onCancel,
+}: PlanningViewProps) {
   return (
     <div className="panel">
       <div className="panel-header row">
@@ -12,14 +18,29 @@ export default function PlanningView({ events, isLoading, onCancel }: PlanningVi
           <h2>Planning session</h2>
           <p>Scanning code, issues, and TODOs.</p>
         </div>
-        <span className={`badge ${isLoading ? "badge-active" : "badge-muted"}`}>
-          {isLoading ? "Scanning" : "Queued"}
+        <span
+          className={`badge ${
+            isLoading
+              ? "badge-active"
+              : errorMessage
+                ? "badge-danger"
+                : "badge-muted"
+          }`}
+        >
+          {isLoading ? "Scanning" : errorMessage ? "Error" : "Queued"}
         </span>
       </div>
 
-      {isLoading && (
-        <div className="progress-bar">
-          <div className="progress-fill" />
+      <div className={`progress-bar ${isLoading ? "is-loading" : "is-idle"}`}>
+        <div
+          className={`progress-fill ${isLoading ? "" : "progress-fill-paused"}`}
+        />
+      </div>
+
+      {errorMessage && (
+        <div className="planning-error" role="alert">
+          <p>Planning failed</p>
+          <pre>{errorMessage}</pre>
         </div>
       )}
 
@@ -28,7 +49,10 @@ export default function PlanningView({ events, isLoading, onCancel }: PlanningVi
           <div className="event-item">Connecting to session...</div>
         ) : (
           events.map((event, i) => (
-            <div key={i} className="event-item">
+            <div
+              key={i}
+              className={`event-item ${event.includes("Error:") ? "event-item-error" : ""}`}
+            >
               {event}
             </div>
           ))
@@ -41,9 +65,8 @@ export default function PlanningView({ events, isLoading, onCancel }: PlanningVi
             type="button"
             className="btn btn-secondary"
             onClick={onCancel}
-            disabled={!isLoading}
           >
-            Cancel
+            {isLoading ? "Cancel" : "Back to start"}
           </button>
         </div>
       )}
