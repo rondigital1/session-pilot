@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { scanForRepositories, parseGitHubRepoFromRemote } from "@/lib/workspace";
 import type { DiscoveredRepo } from "@/lib/workspace";
+import { validateCsrfProtection, addSecurityHeaders } from "@/lib/security";
 
 // Force Node.js runtime for file system access
 export const runtime = "nodejs";
@@ -48,7 +49,7 @@ function getWorkspaceRoots(): string[] {
  * Request body:
  * {
  *   path?: string,     // Directory to scan (optional - uses workspace roots if not provided)
- *   maxDepth?: number  // How deep to scan (default: 2)
+ *   maxDepth?: number  // How deep to scan (default: 2, max: 10)
  * }
  *
  * Response:
@@ -60,8 +61,27 @@ function getWorkspaceRoots(): string[] {
  * }
  */
 export async function POST(request: NextRequest) {
+  const csrfError = validateCsrfProtection(request);
+  if (csrfError) return addSecurityHeaders(csrfError);
+
   try {
     const body: ScanRequestBody = await request.json();
+
+    // Validate maxDepth if provided
+    if (body.maxDepth !== undefined) {
+      if (
+        !Number.isInteger(body.maxDepth) ||
+        body.maxDepth < 1 ||
+        body.maxDepth > 10
+      ) {
+        return addSecurityHeaders(
+          NextResponse.json(
+            { error: "maxDepth must be a positive integer no greater than 10" },
+            { status: 400 }
+          )
+        );
+      }
+    }
 
     // Determine paths to scan
     let pathsToScan: string[];
@@ -75,9 +95,14 @@ export async function POST(request: NextRequest) {
       isWorkspaceRootsScan = true;
 
       if (pathsToScan.length === 0) {
-        return NextResponse.json(
-          { error: "No workspace roots configured. Set SESSIONPILOT_WORKSPACE_ROOTS in your .env file." },
-          { status: 400 }
+        return addSecurityHeaders(
+          NextResponse.json(
+            {
+              error:
+                "No workspace roots configured. Set SESSIONPILOT_WORKSPACE_ROOTS in your .env file.",
+            },
+            { status: 400 }
+          )
         );
       }
     }
@@ -118,7 +143,9 @@ export async function POST(request: NextRequest) {
         totalScannedDirs += result.scannedDirs;
         allErrors.push(...result.errors);
       } catch (err) {
-        allErrors.push(`Failed to scan ${scanPath}: ${err instanceof Error ? err.message : String(err)}`);
+        allErrors.push(
+          `Failed to scan ${scanPath}: ${err instanceof Error ? err.message : String(err)}`
+        );
       }
     }
 
@@ -129,12 +156,11 @@ export async function POST(request: NextRequest) {
       ...(isWorkspaceRootsScan && { workspaceRoots: pathsToScan }),
     };
 
-    return NextResponse.json(response);
+    return addSecurityHeaders(NextResponse.json(response));
   } catch (error) {
     console.error("Failed to scan for repositories:", error);
-    return NextResponse.json(
-      { error: "Failed to scan directory" },
-      { status: 500 }
+    return addSecurityHeaders(
+      NextResponse.json({ error: "Failed to scan directory" }, { status: 500 })
     );
   }
 }

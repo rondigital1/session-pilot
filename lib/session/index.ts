@@ -10,10 +10,8 @@ export {
 export type { SessionData, TaskData } from "./summary";
 
 export {
-  subscribeToSession,
   emitSessionEvent,
   completeSession,
   isSessionComplete,
   cleanupSession,
-  getSessionEvents,
 } from "./events";

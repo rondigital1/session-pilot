@@ -121,11 +121,6 @@ export async function validatePathWithinRoots(localPath: string): Promise<Valida
   // SECURITY: Require explicit configuration in production
   if (allowedRoots.length === 0) {
     if (isDevelopment()) {
-      console.warn(
-        "[Security Warning] SESSIONPILOT_WORKSPACE_ROOTS is not configured. " +
-        "Any local path is allowed in development mode. " +
-        "Set this variable in production to restrict workspace paths."
-      );
       return { valid: true };
     }
     

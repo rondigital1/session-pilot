@@ -16,11 +16,10 @@ import type {
   SessionMetrics,
   SessionState,
   TaskStatus,
-  UITaskChecklistItem,
-  UITaskContext,
-  UpdateTaskRequest,
   UITask,
+  UpdateTaskRequest,
 } from "@/server/types/domain";
+import { useSessionApi } from "@/app/hooks/useSessionApi";
 
 const STORAGE_KEY = "session-pilot:session";
 
@@ -67,17 +66,6 @@ interface SessionContextValue extends SessionData {
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-interface ApiTask {
-  id: string;
-  title: string;
-  description?: string | null;
-  estimatedMinutes?: number | null;
-  status: TaskStatus;
-  notes?: string | null;
-  checklist?: UITaskChecklistItem[];
-  context?: UITaskContext;
-}
-
 function dedupeTasksById(tasks: UITask[]): UITask[] {
   const seen = new Set<string>();
   const deduped: UITask[] = [];
@@ -91,27 +79,6 @@ function dedupeTasksById(tasks: UITask[]): UITask[] {
   }
 
   return deduped;
-}
-
-function mapApiTask(apiTask: ApiTask, existing?: UITask): UITask {
-  return {
-    id: apiTask.id,
-    title: apiTask.title,
-    description: apiTask.description ?? undefined,
-    estimatedMinutes: apiTask.estimatedMinutes ?? undefined,
-    status: apiTask.status,
-    notes: apiTask.notes ?? existing?.notes,
-    checklist: apiTask.checklist ?? existing?.checklist,
-    context: apiTask.context ?? existing?.context,
-  };
-}
-
-function mergeApiTasks(prevTasks: UITask[], apiTasks: ApiTask[]) {
-  const byId = new Map(prevTasks.map((task) => [task.id, task]));
-  const merged = apiTasks.map((task) => mapApiTask(task, byId.get(task.id)));
-  const existingIds = new Set(apiTasks.map((task) => task.id));
-  const leftover = prevTasks.filter((task) => !existingIds.has(task.id));
-  return [...merged, ...leftover];
 }
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
@@ -239,157 +206,39 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
-  const syncTasksFromApi = useCallback(async () => {
-    if (!sessionData.sessionId) {
-      return;
-    }
-
-    try {
-      const response = await fetch(`/api/session/${sessionData.sessionId}/task`);
-      if (!response.ok) {
-        return;
-      }
-      const data = (await response.json()) as { tasks?: ApiTask[] };
-      if (!data.tasks) {
-        return;
-      }
-      setSessionData((prev) => ({
+  const setTasksFromApi = useCallback((mappedTasks: UITask[]) => {
+    setSessionData((prev) => {
+      const existingIds = new Set(mappedTasks.map((t) => t.id));
+      const leftover = prev.tasks.filter((t) => !existingIds.has(t.id));
+      return {
         ...prev,
-        tasks: dedupeTasksById(mergeApiTasks(prev.tasks, data.tasks || [])),
-      }));
-    } catch (error) {
-      console.error("Failed to sync tasks:", error);
-    }
-  }, [sessionData.sessionId]);
+        tasks: dedupeTasksById([...mappedTasks, ...leftover]),
+      };
+    });
+  }, []);
 
-  const createTaskFromApi = useCallback(
-    async (payload: CreateTaskRequest) => {
-      if (!sessionData.sessionId) {
-        return null;
-      }
+  const addCreatedTask = useCallback((task: UITask) => {
+    setSessionData((prev) => ({
+      ...prev,
+      tasks: dedupeTasksById([...prev.tasks, task]),
+    }));
+  }, []);
 
-      try {
-        const response = await fetch(
-          `/api/session/${sessionData.sessionId}/task`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          }
-        );
+  const updateTaskInState = useCallback((taskId: string, task: UITask) => {
+    setSessionData((prev) => ({
+      ...prev,
+      tasks: prev.tasks.map((t) => (t.id === taskId ? task : t)),
+    }));
+  }, []);
 
-        if (!response.ok) {
-          return null;
-        }
-
-        const data = (await response.json()) as { task?: ApiTask };
-        if (!data.task) {
-          return null;
-        }
-
-        const mapped = mapApiTask(data.task);
-        setSessionData((prev) => ({
-          ...prev,
-          tasks: dedupeTasksById([...prev.tasks, mapped]),
-        }));
-        return mapped;
-      } catch (error) {
-        console.error("Failed to create task:", error);
-        return null;
-      }
-    },
-    [sessionData.sessionId]
-  );
-
-  const generateChecklistFromApi = useCallback(
-    async (payload: GenerateChecklistRequest) => {
-      if (!sessionData.sessionId) {
-        return [];
-      }
-
-      try {
-        const response = await fetch(
-          `/api/session/${sessionData.sessionId}/task/checklist`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          }
-        );
-
-        if (!response.ok) {
-          return [];
-        }
-
-        const data = (await response.json()) as { items?: string[] };
-        if (!Array.isArray(data.items)) {
-          return [];
-        }
-
-        return data.items
-          .filter((item): item is string => typeof item === "string")
-          .map((item) => item.trim())
-          .filter((item) => item.length > 0);
-      } catch (error) {
-        console.error("Failed to generate checklist:", error);
-        return [];
-      }
-    },
-    [sessionData.sessionId]
-  );
-
-  const patchTask = useCallback(
-    async (taskId: string, updates: UpdateTaskRequest) => {
-      if (!sessionData.sessionId) {
-        return null;
-      }
-
-      const currentTask = sessionData.tasks.find((task) => task.id === taskId);
-      const status = updates.status ?? currentTask?.status ?? "pending";
-
-      try {
-        const response = await fetch(
-          `/api/session/${sessionData.sessionId}/task`,
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              taskId,
-              status,
-              title: updates.title,
-              description: updates.description,
-              estimatedMinutes: updates.estimatedMinutes,
-              notes: updates.notes,
-              checklist: updates.checklist,
-              context: updates.context,
-            }),
-          }
-        );
-
-        if (!response.ok) {
-          return null;
-        }
-
-        const data = (await response.json()) as { task?: ApiTask };
-        if (!data.task) {
-          return null;
-        }
-
-        const mapped = mapApiTask(data.task, currentTask);
-        setSessionData((prev) => ({
-          ...prev,
-          tasks: prev.tasks.map((task) =>
-            task.id === taskId ? mapped : task
-          ),
-        }));
-        return mapped;
-      } catch (error) {
-        console.error("Failed to update task:", error);
-        return null;
-      }
-    },
-    [sessionData.sessionId, sessionData.tasks, updateTaskNotes, updateTaskStatus]
-  );
+  const { syncTasksFromApi, createTaskFromApi, generateChecklistFromApi, patchTask } =
+    useSessionApi({
+      sessionId: sessionData.sessionId,
+      tasks: sessionData.tasks,
+      setTasksFromApi,
+      addCreatedTask,
+      updateTaskInState,
+    });
 
   const resetSession = useCallback(() => {
     setSessionData(initialSessionData);

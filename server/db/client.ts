@@ -267,8 +267,8 @@ export async function initializeDb() {
   try {
     await migrate(db, { migrationsFolder });
   } catch (error) {
-    // Log but don't throw - migrations may have already been applied
-    console.error("Migration error (may be safe to ignore if already applied):", error);
+    console.error("Migration failed:", error);
+    throw error;
   }
 
   return db;

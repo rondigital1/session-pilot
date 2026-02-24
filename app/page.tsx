@@ -11,19 +11,8 @@ import SummaryView from "./components/SummaryView";
 import WorkspaceManager from "./components/WorkspaceManager";
 import { useSession } from "./session-context";
 import { playSessionCompleteSound, resumeAudioContext } from "@/lib/audio";
-
-const TERMINAL_PLANNING_ERROR_CODES = new Set([
-  "INVALID_WORKSPACE",
-  "PLANNING_FAILED",
-  "POLL_ERROR",
-]);
-
-function isTerminalPlanningError(code?: string): boolean {
-  if (!code) {
-    return false;
-  }
-  return TERMINAL_PLANNING_ERROR_CODES.has(code);
-}
+import { API } from "@/app/utils/api-routes";
+import { useSessionEvents } from "@/app/hooks/useSessionEvents";
 
 /**
  * SessionPilot - Single Page Application
@@ -42,9 +31,6 @@ export default function HomePage() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>("");
   const [showWorkspaceManager, setShowWorkspaceManager] = useState<boolean>(false);
-  const [eventSource, setEventSource] = useState<EventSource | null>(null);
-  const [planningError, setPlanningError] = useState<string | null>(null);
-  const [isPlanningStreamComplete, setIsPlanningStreamComplete] = useState(false);
 
   const {
     sessionState,
@@ -71,6 +57,26 @@ export default function HomePage() {
     patchTask,
     resetSession,
   } = useSession();
+
+  const {
+    eventSource,
+    planningError,
+    isPlanningStreamComplete,
+    connectToEvents,
+    setPlanningError,
+    setIsPlanningStreamComplete,
+  } = useSessionEvents({
+    onEvent: handleSSEEvent,
+    onError: (message) => {
+      addEvent(message);
+      setIsLoading(false);
+      setSessionState("start");
+    },
+    onClosed: () => {
+      setIsLoading(false);
+      setSessionState("start");
+    },
+  });
 
   useEffect(() => {
     loadWorkspaces();
@@ -99,7 +105,7 @@ export default function HomePage() {
       connectToEvents(sessionId);
     }
   }, [sessionId, sessionState, eventSource, isPlanningStreamComplete]);
-  
+
   // If we have tasks while in planning state, planning already completed - advance to task selection
   useEffect(() => {
     if (sessionState === "planning" && tasks.length > 0 && !isLoading) {
@@ -108,18 +114,9 @@ export default function HomePage() {
     }
   }, [sessionState, tasks.length, isLoading, setSessionState]);
 
-  // Cleanup event source on unmount
-  useEffect(() => {
-    return () => {
-      if (eventSource) {
-        eventSource.close();
-      }
-    };
-  }, [eventSource]);
-
   async function loadWorkspaces() {
     try {
-      const response = await fetch("/api/workspaces");
+      const response = await fetch(API.workspaces);
       const data = await response.json();
       setWorkspaces(data.workspaces || []);
     } catch (error) {
@@ -141,7 +138,7 @@ export default function HomePage() {
     setSessionState("planning");
 
     try {
-      const response = await fetch("/api/session/start", {
+      const response = await fetch(API.sessionStart, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -163,89 +160,11 @@ export default function HomePage() {
     } catch (error) {
       console.error("Failed to start session:", error);
       const message = error instanceof Error ? error.message : "Unknown error";
-      addEvent(
-        `Error: ${message}`
-      );
+      addEvent(`Error: ${message}`);
       setPlanningError(message);
       setIsLoading(false);
       setSessionState("start");
     }
-  }
-
-  function connectToEvents(activeSessionId: string) {
-    // Close existing connection if any
-    if (eventSource) {
-      eventSource.close();
-    }
-
-    const eventUrl = `/api/session/${activeSessionId}/events`;
-    console.log(`[SSE Client] Connecting to ${eventUrl}`);
-    const es = new EventSource(eventUrl);
-    setEventSource(es);
-    
-    // Track connection status
-    let hasConnected = false;
-    let hasReceivedEvents = false;
-    let hasCompletedNormally = false;
-    let errorCount = 0;
-
-    es.onopen = () => {
-      hasConnected = true;
-      errorCount = 0;
-      console.log("SSE connection opened");
-    };
-
-    es.onmessage = (event) => {
-      hasReceivedEvents = true;
-      try {
-        const data: SSEEvent = JSON.parse(event.data);
-        // Track if we received a terminal event (session completed normally)
-        if (data.type === "planning_completed" || data.type === "session_ended") {
-          hasCompletedNormally = true;
-        }
-        handleSSEEvent(data);
-      } catch (error) {
-        console.error("Failed to parse SSE event:", error);
-      }
-    };
-
-    es.onerror = () => {
-      errorCount++;
-      const state = es.readyState;
-      
-      // If session completed normally, any subsequent error/close is expected
-      if (hasCompletedNormally) {
-        console.log("SSE connection closed after session completed");
-        es.close();
-        setEventSource(null);
-        return;
-      }
-      
-      // If EventSource is reconnecting (CONNECTING state), let it retry silently
-      // EventSource auto-reconnects, so only log on first attempt or when closed
-      if (state === EventSource.CONNECTING && hasReceivedEvents) {
-        // Already received events, EventSource is just reconnecting - this is normal
-        // Don't log as error, just let it retry
-        return;
-      }
-      
-      // Only log true errors (never connected, or connection permanently closed)
-      if (state === EventSource.CLOSED || !hasConnected) {
-        const stateStr = state === EventSource.CONNECTING ? "CONNECTING" : 
-                         state === EventSource.OPEN ? "OPEN" : "CLOSED";
-        console.error(`SSE connection failed. ReadyState: ${stateStr}, errorCount: ${errorCount}`);
-        
-        es.close();
-        setEventSource(null);
-        
-        // Only show error to user if we never received any events
-        if (!hasReceivedEvents) {
-          addEvent("Connection lost. Please try again.");
-          setIsLoading(false);
-          setSessionState("start");
-        }
-      }
-    };
   }
 
   function handleSSEEvent(event: SSEEvent) {
@@ -257,7 +176,6 @@ export default function HomePage() {
         break;
 
       case "heartbeat":
-        // Ignore heartbeat events in the UI
         break;
 
       case "scan_started":
@@ -302,8 +220,6 @@ export default function HomePage() {
 
       case "planning_completed":
         addEvent(`[${time}] Planning complete!`);
-        setPlanningError(null);
-        setIsPlanningStreamComplete(true);
         setIsLoading(false);
         void syncTasksFromApi();
         setTimeout(() => {
@@ -314,19 +230,11 @@ export default function HomePage() {
       case "session_ended": {
         const endData = event.data as { cancelled?: boolean; streamComplete?: boolean };
         if (endData.streamComplete) {
-          setIsPlanningStreamComplete(true);
           setIsLoading(false);
         }
         if (endData.cancelled) {
           addEvent(`[${time}] Session cancelled`);
         }
-        // Close event source
-        setEventSource((activeEventSource) => {
-          if (activeEventSource) {
-            activeEventSource.close();
-          }
-          return null;
-        });
         break;
       }
 
@@ -334,12 +242,7 @@ export default function HomePage() {
         const errorData = event.data as { code?: string; message?: string };
         const errorMessage = errorData.message || "Unknown error";
         addEvent(`[${time}] Error: ${errorMessage}`);
-
-        if (isTerminalPlanningError(errorData.code)) {
-          setPlanningError(errorMessage);
-          setIsLoading(false);
-          setIsPlanningStreamComplete(true);
-        }
+        setIsLoading(false);
         break;
       }
     }
@@ -383,7 +286,7 @@ export default function HomePage() {
     setIsLoading(true);
 
     try {
-      const response = await fetch(`/api/session/${sessionId}/end`, {
+      const response = await fetch(API.sessionEnd(sessionId), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
@@ -412,7 +315,6 @@ export default function HomePage() {
   function handleNewSession() {
     if (eventSource) {
       eventSource.close();
-      setEventSource(null);
     }
     resetSession();
     setEvents([]);
@@ -422,16 +324,13 @@ export default function HomePage() {
   }
 
   async function handleCancelSession() {
-    // Close event source first
     if (eventSource) {
       eventSource.close();
-      setEventSource(null);
     }
 
-    // Call cancel API if we have a session
     if (sessionId) {
       try {
-        await fetch(`/api/session/${sessionId}/cancel`, { method: "POST" });
+        await fetch(API.sessionCancel(sessionId), { method: "POST" });
       } catch (error) {
         console.error("Failed to cancel session:", error);
       }
@@ -447,11 +346,8 @@ export default function HomePage() {
   const showTaskNav = sessionState === "session" && tasks.length > 0;
 
   function handleOpenWorkspaceManager() {
-    // Close any active SSE connection before managing workspaces
-    // to prevent errors if a workspace with an active session is deleted
     if (eventSource) {
       eventSource.close();
-      setEventSource(null);
     }
     setShowWorkspaceManager(true);
   }

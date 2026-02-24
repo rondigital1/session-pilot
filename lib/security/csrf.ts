@@ -69,9 +69,6 @@ export function validateCsrfProtection(request: NextRequest): NextResponse | nul
   
   if (secFetchSite) {
     if (secFetchSite !== "same-origin" && secFetchSite !== "none") {
-      console.warn(
-        `[Security] CSRF protection blocked request with Sec-Fetch-Site: ${secFetchSite}`
-      );
       return NextResponse.json(
         { error: "Cross-origin requests are not allowed" },
         { status: 403 }
@@ -104,7 +101,6 @@ function validateOrigin(request: NextRequest): NextResponse | null {
 
   // Check if origin is in allowed list
   if (!ALLOWED_ORIGINS.includes(origin)) {
-    console.warn(`[Security] Request blocked from unauthorized origin: ${origin}`);
     return NextResponse.json(
       { error: "Forbidden: unauthorized origin" },
       { status: 403 }
