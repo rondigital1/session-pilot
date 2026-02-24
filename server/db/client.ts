@@ -181,11 +181,66 @@ async function ensureSchemaUpToDate(client: ReturnType<typeof createClient>) {
     schemaUpdated = true;
   }
 
+  // Create improve tables if missing (idempotent)
+  const snapshotsTable = await client.execute(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='project_snapshots'"
+  );
+  if (snapshotsTable.rows.length === 0) {
+    await client.executeMultiple(`
+      CREATE TABLE project_snapshots (
+        id TEXT PRIMARY KEY NOT NULL,
+        workspace_id TEXT NOT NULL,
+        snapshot_hash TEXT NOT NULL,
+        snapshot_data TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON UPDATE no action ON DELETE no action
+      );
+      CREATE TABLE improvement_ideas (
+        id TEXT PRIMARY KEY NOT NULL,
+        workspace_id TEXT NOT NULL,
+        snapshot_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        category TEXT NOT NULL,
+        impact TEXT NOT NULL,
+        effort TEXT NOT NULL,
+        risk TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        score REAL NOT NULL,
+        evidence TEXT NOT NULL,
+        acceptance_criteria TEXT NOT NULL,
+        steps TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON UPDATE no action ON DELETE no action,
+        FOREIGN KEY (snapshot_id) REFERENCES project_snapshots(id) ON UPDATE no action ON DELETE no action
+      );
+      CREATE TABLE idea_feedback (
+        id TEXT PRIMARY KEY NOT NULL,
+        idea_id TEXT NOT NULL,
+        vote TEXT NOT NULL,
+        reason TEXT,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (idea_id) REFERENCES improvement_ideas(id) ON UPDATE no action ON DELETE no action
+      );
+    `);
+    console.log("Schema update: Added improve feature tables");
+    schemaUpdated = true;
+  }
+
   // Create indexes if they don't exist (idempotent operation)
   await client.executeMultiple(`
     CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_session ON session_tasks(session_id);
     CREATE INDEX IF NOT EXISTS idx_signals_session ON signals(session_id);
+    CREATE INDEX IF NOT EXISTS idx_snapshots_workspace ON project_snapshots(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_snapshots_hash ON project_snapshots(snapshot_hash);
+    CREATE INDEX IF NOT EXISTS idx_snapshots_created ON project_snapshots(created_at);
+    CREATE INDEX IF NOT EXISTS idx_ideas_workspace ON improvement_ideas(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_ideas_snapshot ON improvement_ideas(snapshot_id);
+    CREATE INDEX IF NOT EXISTS idx_ideas_status ON improvement_ideas(status);
+    CREATE INDEX IF NOT EXISTS idx_ideas_created ON improvement_ideas(created_at);
+    CREATE INDEX IF NOT EXISTS idx_feedback_idea ON idea_feedback(idea_id);
+    CREATE INDEX IF NOT EXISTS idx_feedback_created ON idea_feedback(created_at);
   `);
   if (hasSessionSummariesTable) {
     await client.executeMultiple(`
