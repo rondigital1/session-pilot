@@ -8,6 +8,7 @@ import PlanningView from "./components/PlanningView";
 import TaskSelectionView from "./components/TaskSelectionView";
 import SessionView from "./components/SessionView";
 import SummaryView from "./components/SummaryView";
+import ImproveView from "./components/ImproveView";
 import WorkspaceManager from "./components/WorkspaceManager";
 import { useSession } from "./session-context";
 import { playSessionCompleteSound, resumeAudioContext } from "@/lib/audio";
@@ -36,6 +37,8 @@ function isTerminalPlanningError(code?: string): boolean {
  * 5. Summary - View session summary, save for tomorrow
  */
 
+type AppView = "session" | "improve";
+
 export default function HomePage() {
   const [workspaces, setWorkspaces] = useState<UIWorkspace[]>([]);
   const [events, setEvents] = useState<string[]>([]);
@@ -45,6 +48,7 @@ export default function HomePage() {
   const [eventSource, setEventSource] = useState<EventSource | null>(null);
   const [planningError, setPlanningError] = useState<string | null>(null);
   const [isPlanningStreamComplete, setIsPlanningStreamComplete] = useState(false);
+  const [activeView, setActiveView] = useState<AppView>("session");
 
   const {
     sessionState,
@@ -444,6 +448,12 @@ export default function HomePage() {
     resetSession();
   }
 
+  function handleStartSessionWithIdea(steps: string[], title: string) {
+    setActiveView("session");
+    setUserGoal(title);
+    // Pre-fill with the idea's steps as a goal, then let user start normally
+  }
+
   const showTaskNav = sessionState === "session" && tasks.length > 0;
 
   function handleOpenWorkspaceManager() {
@@ -458,9 +468,10 @@ export default function HomePage() {
 
   return (
     <AppShell
-      active="session"
+      active={activeView === "improve" ? "improve" : "session"}
       showTaskNav={showTaskNav}
       onManageWorkspaces={handleOpenWorkspaceManager}
+      onNavigateImprove={() => setActiveView(activeView === "improve" ? "session" : "improve")}
     >
       {showWorkspaceManager && (
         <WorkspaceManager
@@ -470,7 +481,16 @@ export default function HomePage() {
         />
       )}
 
-      {sessionState === "start" && (
+      {activeView === "improve" && (
+        <ImproveView
+          workspaces={workspaces}
+          selectedWorkspaceId={selectedWorkspaceId}
+          onSelectWorkspace={setSelectedWorkspaceId}
+          onStartSessionWithIdea={handleStartSessionWithIdea}
+        />
+      )}
+
+      {activeView === "session" && sessionState === "start" && (
         <StartView
           workspaces={workspaces}
           selectedWorkspaceId={selectedWorkspaceId}
@@ -487,7 +507,7 @@ export default function HomePage() {
         />
       )}
 
-      {sessionState === "planning" && (
+      {activeView === "session" && sessionState === "planning" && (
         <PlanningView
           events={events}
           isLoading={isLoading}
@@ -496,7 +516,7 @@ export default function HomePage() {
         />
       )}
 
-      {sessionState === "task_selection" && (
+      {activeView === "session" && sessionState === "task_selection" && (
         <TaskSelectionView
           tasks={tasks}
           timeBudget={timeBudget}
@@ -509,7 +529,7 @@ export default function HomePage() {
         />
       )}
 
-      {sessionState === "session" && (
+      {activeView === "session" && sessionState === "session" && (
         <SessionView
           tasks={tasks}
           timeBudget={timeBudget}
@@ -523,7 +543,7 @@ export default function HomePage() {
         />
       )}
 
-      {sessionState === "summary" && (
+      {activeView === "session" && sessionState === "summary" && (
         <SummaryView
           tasks={tasks}
           summary={summary}

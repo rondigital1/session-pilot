@@ -1,9 +1,10 @@
 import Link from "next/link";
 
 interface AppShellProps {
-  active?: "session" | "task";
+  active?: "session" | "task" | "improve";
   showTaskNav?: boolean;
   onManageWorkspaces?: () => void;
+  onNavigateImprove?: () => void;
   children: React.ReactNode;
 }
 
@@ -11,6 +12,7 @@ export default function AppShell({
   active = "session",
   showTaskNav = false,
   onManageWorkspaces,
+  onNavigateImprove,
   children,
 }: AppShellProps) {
   return (
@@ -36,6 +38,15 @@ export default function AppShell({
             >
               Task Detail
             </span>
+          )}
+          {onNavigateImprove && (
+            <button
+              className={`nav-link ${active === "improve" ? "active" : ""}`}
+              onClick={onNavigateImprove}
+              type="button"
+            >
+              Improve
+            </button>
           )}
           {onManageWorkspaces && (
             <button

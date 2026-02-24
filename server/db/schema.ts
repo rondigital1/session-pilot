@@ -144,6 +144,93 @@ export const sessionEvents = sqliteTable(
   (table) => [index("idx_events_session").on(table.sessionId)]
 );
 
+// =============================================================================
+// Improve Feature Tables
+// =============================================================================
+
+/**
+ * Project snapshots table - stores deterministic snapshots of workspace state
+ * Each snapshot captures health signals, hotspots, and stack info for a workspace.
+ * The snapshotHash enables cache reuse when repo state hasn't changed.
+ */
+export const projectSnapshots = sqliteTable(
+  "project_snapshots",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    snapshotHash: text("snapshot_hash").notNull(),
+    snapshotData: text("snapshot_data").notNull(), // Full ProjectSnapshotV1 JSON
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    index("idx_snapshots_workspace").on(table.workspaceId),
+    index("idx_snapshots_hash").on(table.snapshotHash),
+    index("idx_snapshots_created").on(table.createdAt),
+  ]
+);
+
+/**
+ * Improvement ideas table - stores AI-generated improvement suggestions
+ * Each idea is tied to a snapshot and workspace, with scoring and evidence.
+ */
+export const improvementIdeas = sqliteTable(
+  "improvement_ideas",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    snapshotId: text("snapshot_id")
+      .notNull()
+      .references(() => projectSnapshots.id),
+    title: text("title").notNull(),
+    category: text("category").notNull(),
+    impact: text("impact").notNull(), // low, medium, high
+    effort: text("effort").notNull(), // small, medium, large
+    risk: text("risk").notNull(), // low, medium, high
+    confidence: real("confidence").notNull(),
+    score: real("score").notNull(),
+    evidence: text("evidence").notNull(), // JSON array of evidence items
+    acceptanceCriteria: text("acceptance_criteria").notNull(), // JSON array
+    steps: text("steps").notNull(), // JSON array
+    status: text("status", {
+      enum: ["active", "accepted", "rejected", "completed"],
+    })
+      .notNull()
+      .default("active"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    index("idx_ideas_workspace").on(table.workspaceId),
+    index("idx_ideas_snapshot").on(table.snapshotId),
+    index("idx_ideas_status").on(table.status),
+    index("idx_ideas_created").on(table.createdAt),
+  ]
+);
+
+/**
+ * Idea feedback table - stores user votes on improvement ideas
+ * Used to downrank rejected ideas and avoid repeating disliked suggestions.
+ */
+export const ideaFeedback = sqliteTable(
+  "idea_feedback",
+  {
+    id: text("id").primaryKey(),
+    ideaId: text("idea_id")
+      .notNull()
+      .references(() => improvementIdeas.id),
+    vote: text("vote", { enum: ["up", "down"] }).notNull(),
+    reason: text("reason"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    index("idx_feedback_idea").on(table.ideaId),
+    index("idx_feedback_created").on(table.createdAt),
+  ]
+);
+
 // Type exports for use in application code
 export type Workspace = typeof workspaces.$inferSelect;
 export type NewWorkspace = typeof workspaces.$inferInsert;
@@ -162,3 +249,12 @@ export type NewSignal = typeof signals.$inferInsert;
 
 export type SessionEvent = typeof sessionEvents.$inferSelect;
 export type NewSessionEvent = typeof sessionEvents.$inferInsert;
+
+export type ProjectSnapshot = typeof projectSnapshots.$inferSelect;
+export type NewProjectSnapshot = typeof projectSnapshots.$inferInsert;
+
+export type ImprovementIdea = typeof improvementIdeas.$inferSelect;
+export type NewImprovementIdea = typeof improvementIdeas.$inferInsert;
+
+export type IdeaFeedbackRow = typeof ideaFeedback.$inferSelect;
+export type NewIdeaFeedback = typeof ideaFeedback.$inferInsert;
