@@ -6,7 +6,7 @@
  */
 
 import type { SSEEvent, SSEEventType } from "@/server/types/domain";
-import { storeSessionEvent, getSessionEventsAfter, updateSessionStatus } from "@/server/db/queries";
+import { storeSessionEvent, getSessionEventsAfter } from "@/server/db/queries";
 import type { SessionEvent } from "@/server/db/schema";
 
 /**
@@ -25,8 +25,6 @@ export async function emitSessionEvent(
     data,
   };
 
-  console.log(`[SessionEvents] Emitting ${type} for session ${sessionId}`);
-
   try {
     await storeSessionEvent(sessionId, type, eventData);
   } catch (error) {
@@ -40,7 +38,6 @@ export async function emitSessionEvent(
  * Emits a special "stream_complete" event to signal the SSE endpoint.
  */
 export async function completeSession(sessionId: string): Promise<void> {
-  console.log(`[SessionEvents] Completing session ${sessionId}`);
   await emitSessionEvent(sessionId, "session_ended", {
     sessionId,
     message: "Session event stream complete",
@@ -93,17 +90,6 @@ export async function isSessionComplete(sessionId: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-// Legacy exports for compatibility (synchronous versions that log warnings)
-export function subscribeToSession(): () => void {
-  console.warn("[SessionEvents] subscribeToSession is deprecated, use pollSessionEvents");
-  return () => {};
-}
-
-export function getSessionEvents(): SSEEvent[] {
-  console.warn("[SessionEvents] getSessionEvents is deprecated, use pollSessionEvents");
-  return [];
 }
 
 export function cleanupSession(): void {

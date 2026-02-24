@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession, updateSessionStatus } from "@/server/db/queries";
 import { emitSessionEvent } from "@/lib/session/events";
+import { validateCsrfProtection, addSecurityHeaders } from "@/lib/security";
 import type { CancelSessionResponse } from "@/server/types/domain";
 
 // Force Node.js runtime
@@ -17,23 +18,30 @@ export const runtime = "nodejs";
  * }
  */
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const csrfError = validateCsrfProtection(request);
+  if (csrfError) return addSecurityHeaders(csrfError);
+
   try {
     const { id: sessionId } = await params;
 
     // Validate session exists
     const session = await getSession(sessionId);
     if (!session) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      return addSecurityHeaders(
+        NextResponse.json({ error: "Session not found" }, { status: 404 })
+      );
     }
 
     // Check session can be cancelled
     if (session.status === "completed" || session.status === "cancelled") {
-      return NextResponse.json(
-        { error: `Session is already ${session.status}` },
-        { status: 400 }
+      return addSecurityHeaders(
+        NextResponse.json(
+          { error: `Session is already ${session.status}` },
+          { status: 400 }
+        )
       );
     }
 
@@ -52,12 +60,14 @@ export async function POST(
       cancelled: true,
     };
 
-    return NextResponse.json(response);
+    return addSecurityHeaders(NextResponse.json(response));
   } catch (error) {
     console.error("Failed to cancel session:", error);
-    return NextResponse.json(
-      { error: "Failed to cancel session" },
-      { status: 500 }
+    return addSecurityHeaders(
+      NextResponse.json(
+        { error: "Failed to cancel session" },
+        { status: 500 }
+      )
     );
   }
 }
