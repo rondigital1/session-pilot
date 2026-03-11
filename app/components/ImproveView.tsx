@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import type { UIWorkspace } from "@/server/types/domain";
+import InlineMessage from "./InlineMessage";
 
 // =============================================================================
 // Types
@@ -32,7 +33,7 @@ interface ImproveViewProps {
   workspaces: UIWorkspace[];
   selectedWorkspaceId: string;
   onSelectWorkspace: (id: string) => void;
-  onStartSessionWithIdea: (steps: string[], title: string) => void;
+  onStartSessionWithIdea: (steps: string[], title: string) => boolean;
 }
 
 type TabFilter = "top3" | "week" | "backlog";
@@ -87,15 +88,20 @@ export default function ImproveView({
   const [isLoading, setIsLoading] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabFilter>("top3");
   const [expandedIdeaId, setExpandedIdeaId] = useState<string | null>(null);
 
   const fetchLatest = useCallback(async () => {
     if (!selectedWorkspaceId) {
+      setIdeas([]);
+      setError(null);
+      setFeedbackMessage(null);
       return;
     }
     setIsLoading(true);
     setError(null);
+    setFeedbackMessage(null);
     try {
       const res = await fetch(`/api/workspaces/${selectedWorkspaceId}/improve`);
       const data = await res.json();
@@ -117,12 +123,17 @@ export default function ImproveView({
     }
   }, [selectedWorkspaceId, fetchLatest]);
 
+  useEffect(() => {
+    setExpandedIdeaId(null);
+  }, [activeTab, selectedWorkspaceId]);
+
   async function handleRunScan() {
     if (!selectedWorkspaceId) {
       return;
     }
     setIsScanning(true);
     setError(null);
+    setFeedbackMessage(null);
     try {
       const res = await fetch(
         `/api/workspaces/${selectedWorkspaceId}/improve?force=1`,
@@ -143,6 +154,7 @@ export default function ImproveView({
 
   async function handleFeedback(ideaId: string, vote: "up" | "down") {
     try {
+      setFeedbackMessage(null);
       const res = await fetch(`/api/improvement-ideas/${ideaId}/feedback`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -163,13 +175,30 @@ export default function ImproveView({
           return idea;
         })
       );
+      setFeedbackMessage(
+        vote === "up"
+          ? "Marked as helpful. SessionPilot will keep this idea surfaced."
+          : "Marked as not useful. It will be deprioritized from the active list."
+      );
     } catch (err) {
+      const message = err instanceof Error ? err.message : "Feedback failed";
       console.error("Feedback error:", err);
+      setError(message);
     }
   }
 
   function toggleExpand(ideaId: string) {
     setExpandedIdeaId((prev) => (prev === ideaId ? null : ideaId));
+  }
+
+  function handleUseIdeaAsDraft(steps: string[], title: string) {
+    const didCopy = onStartSessionWithIdea(steps, title);
+    if (!didCopy) {
+      return;
+    }
+    setFeedbackMessage(
+      "Copied this idea into the session draft. Review the goal in the Session tab before starting."
+    );
   }
 
   // Filter ideas by tab
@@ -207,7 +236,11 @@ export default function ImproveView({
             <h3>Workspace</h3>
           </div>
           <div className="form-group">
+            <label className="form-label" htmlFor="improve-workspace">
+              Improvement target
+            </label>
             <select
+              id="improve-workspace"
               className="form-select"
               value={selectedWorkspaceId}
               onChange={(e) => onSelectWorkspace(e.target.value)}
@@ -219,6 +252,9 @@ export default function ImproveView({
                 </option>
               ))}
             </select>
+            <p className="form-hint">
+              Improve analyzes saved workspace signals and proposes the highest-leverage next upgrades.
+            </p>
           </div>
           <button
             className="btn btn-primary btn-full"
@@ -262,10 +298,15 @@ export default function ImproveView({
 
       {/* Error display */}
       {error && (
-        <div className="planning-error">
-          <p>Error</p>
-          <pre>{error}</pre>
-        </div>
+        <InlineMessage tone="error" title="Improve unavailable">
+          <p>{error}</p>
+        </InlineMessage>
+      )}
+
+      {feedbackMessage && (
+        <InlineMessage tone="success" title="Improve updated">
+          <p>{feedbackMessage}</p>
+        </InlineMessage>
       )}
 
       {/* Loading state */}
@@ -311,7 +352,12 @@ export default function ImproveView({
               className={`idea-card ${idea.status === "accepted" ? "idea-card-accepted" : ""} ${idea.status === "rejected" ? "idea-card-rejected" : ""}`}
             >
               {/* Card header */}
-              <div className="idea-card-header" onClick={() => toggleExpand(idea.id)}>
+              <button
+                type="button"
+                className="idea-card-header"
+                onClick={() => toggleExpand(idea.id)}
+                aria-expanded={expandedIdeaId === idea.id}
+              >
                 <div className="idea-card-title-row">
                   <span className="idea-score">{Math.round(idea.score)}</span>
                   <div className="idea-card-info">
@@ -331,7 +377,7 @@ export default function ImproveView({
                 <span className="idea-expand-indicator">
                   {expandedIdeaId === idea.id ? "\u25B2" : "\u25BC"}
                 </span>
-              </div>
+              </button>
 
               {/* Expanded content */}
               {expandedIdeaId === idea.id && (
@@ -374,9 +420,9 @@ export default function ImproveView({
                     <button
                       type="button"
                       className="btn btn-primary btn-sm"
-                      onClick={() => onStartSessionWithIdea(idea.steps, idea.title)}
+                      onClick={() => handleUseIdeaAsDraft(idea.steps, idea.title)}
                     >
-                      Start session with this
+                      Use as session draft
                     </button>
                     {idea.status === "active" && (
                       <>

@@ -81,6 +81,20 @@ function dedupeTasksById(tasks: UITask[]): UITask[] {
   return deduped;
 }
 
+function areTasksEqual(current: UITask[], next: UITask[]) {
+  if (current.length !== next.length) {
+    return false;
+  }
+
+  for (let index = 0; index < current.length; index += 1) {
+    if (JSON.stringify(current[index]) !== JSON.stringify(next[index])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [sessionData, setSessionData] = useState<SessionData>(
     initialSessionData
@@ -210,9 +224,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     setSessionData((prev) => {
       const existingIds = new Set(mappedTasks.map((t) => t.id));
       const leftover = prev.tasks.filter((t) => !existingIds.has(t.id));
+      const nextTasks = dedupeTasksById([...mappedTasks, ...leftover]);
+
+      if (areTasksEqual(prev.tasks, nextTasks)) {
+        return prev;
+      }
+
       return {
         ...prev,
-        tasks: dedupeTasksById([...mappedTasks, ...leftover]),
+        tasks: nextTasks,
       };
     });
   }, []);

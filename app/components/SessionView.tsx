@@ -8,8 +8,10 @@ import type {
 } from "@/server/types/domain";
 import SessionTimer from "./SessionTimer";
 import AddTaskForm from "./AddTaskForm";
+import InlineMessage from "./InlineMessage";
 
 interface SessionViewProps {
+  sessionId?: string | null;
   tasks: UITask[];
   timeBudget: number;
   userGoal: string;
@@ -18,7 +20,10 @@ interface SessionViewProps {
   onAddTask: (task: CreateTaskRequest) => Promise<UITask | null>;
   onGenerateChecklist: (payload: GenerateChecklistRequest) => Promise<string[]>;
   onEndSession: () => void;
+  onLeaveOpen: () => void;
   isLoading: boolean;
+  errorMessage?: string | null;
+  statusMessage?: string | null;
 }
 
 function getChecklistStats(task: UITask) {
@@ -31,6 +36,7 @@ function getChecklistStats(task: UITask) {
 }
 
 export default function SessionView({
+  sessionId,
   tasks,
   timeBudget,
   userGoal,
@@ -39,7 +45,10 @@ export default function SessionView({
   onAddTask,
   onGenerateChecklist,
   onEndSession,
+  onLeaveOpen,
   isLoading,
+  errorMessage,
+  statusMessage,
 }: SessionViewProps) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [isAddingTask, setIsAddingTask] = useState(false);
@@ -79,6 +88,18 @@ export default function SessionView({
         </div>
       </section>
 
+      {errorMessage && (
+        <InlineMessage tone="error" title="Session action failed">
+          <p>{errorMessage}</p>
+        </InlineMessage>
+      )}
+
+      {statusMessage && (
+        <InlineMessage tone="success" title="Session updated">
+          <p>{statusMessage}</p>
+        </InlineMessage>
+      )}
+
       <div className="grid">
         <section className="panel">
           <div className="panel-header row">
@@ -102,10 +123,15 @@ export default function SessionView({
                     className="task-checkbox"
                     checked={task.status === "completed"}
                     onChange={() => onToggleTask(task.id)}
+                    aria-label={`${task.status === "completed" ? "Mark incomplete" : "Mark complete"} for ${task.title}`}
                   />
                   <div className="task-content">
                     <Link
-                      href={`/tasks/${task.id}`}
+                      href={
+                        sessionId
+                          ? `/tasks/${task.id}?session=${encodeURIComponent(sessionId)}`
+                          : `/tasks/${task.id}`
+                      }
                       className={`task-title ${
                         task.status === "completed" ? "completed" : ""
                       }`}
@@ -138,7 +164,11 @@ export default function SessionView({
           </ul>
 
           {tasks.length === 0 && !showAddForm && (
-            <p className="text-muted text-center">No tasks yet</p>
+            <div className="empty-state empty-state-panel">
+              <p className="text-muted">
+                No tasks in this session yet. Add one to keep momentum going.
+              </p>
+            </div>
           )}
 
           {showAddForm ? (
@@ -199,13 +229,26 @@ export default function SessionView({
             </div>
           </div>
 
-          <button
-            className="btn btn-success btn-full"
-            onClick={onEndSession}
-            disabled={isLoading}
-          >
-            {isLoading ? "Ending..." : "End session"}
-          </button>
+          <div className="selection-buttons">
+            <button
+              className="btn btn-success btn-full"
+              onClick={onEndSession}
+              disabled={isLoading}
+            >
+              {isLoading ? "Ending..." : "End session"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline btn-full"
+              onClick={onLeaveOpen}
+              disabled={isLoading}
+            >
+              Leave open for later
+            </button>
+            <p className="form-hint">
+              This keeps the session active so you can resume it from the start screen.
+            </p>
+          </div>
         </aside>
       </div>
     </div>

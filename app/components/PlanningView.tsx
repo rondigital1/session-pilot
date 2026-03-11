@@ -16,7 +16,7 @@ export default function PlanningView({
       <div className="panel-header row">
         <div>
           <h2>Planning session</h2>
-          <p>Scanning code, issues, and TODOs.</p>
+          <p>Reviewing repo signals and shaping a session draft.</p>
         </div>
         <span
           className={`badge ${
@@ -27,7 +27,7 @@ export default function PlanningView({
                 : "badge-muted"
           }`}
         >
-          {isLoading ? "Scanning" : errorMessage ? "Error" : "Queued"}
+          {isLoading ? "Planning" : errorMessage ? "Error" : "Waiting"}
         </span>
       </div>
 
@@ -46,7 +46,7 @@ export default function PlanningView({
 
       <div className="events-log">
         {events.length === 0 ? (
-          <div className="event-item">Connecting to session...</div>
+          <div className="event-item">Connecting to planning stream...</div>
         ) : (
           events.map((event, i) => (
             <div

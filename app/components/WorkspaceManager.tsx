@@ -5,6 +5,7 @@ import type { UIWorkspace } from "@/server/types/domain";
 import { API } from "@/app/utils/api-routes";
 import WorkspaceForm from "./WorkspaceForm";
 import WorkspaceScanner from "./WorkspaceScanner";
+import InlineMessage from "./InlineMessage";
 
 interface WorkspaceManagerProps {
   workspaces: UIWorkspace[];
@@ -85,7 +86,11 @@ export default function WorkspaceManager({
           </button>
         </div>
 
-        {error && <div className="error-message">{error}</div>}
+        {error && (
+          <InlineMessage tone="error" title="Workspace update failed">
+            <p>{error}</p>
+          </InlineMessage>
+        )}
 
         {/* Workspace List */}
         {activePanel === "list" && (
@@ -94,7 +99,9 @@ export default function WorkspaceManager({
               {workspaces.length === 0 ? (
                 <div className="empty-state">
                   <p className="text-muted">No workspaces yet.</p>
-                  <p className="text-muted">Create one to get started.</p>
+                  <p className="text-muted">
+                    Add one to start planning sessions, scanning repos, and saving progress.
+                  </p>
                 </div>
               ) : (
                 workspaces.map((ws) => (
