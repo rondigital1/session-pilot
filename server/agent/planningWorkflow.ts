@@ -3,7 +3,7 @@
  *
  * Orchestrates the full session planning workflow:
  * 1. Scans local repository for signals (TODOs, git changes, etc.)
- * 2. Optionally scans GitHub for issues, PRs, and commits
+ * 2. Optionally scans GitHub for remote-only signals
  * 3. Stores signals in the database
  * 4. Generates a session plan using Claude
  * 5. Stores generated tasks in the database
@@ -104,9 +104,32 @@ export async function runPlanningWorkflow(
       const parsed = parseGitHubRepo(workspace.githubRepo);
 
       if (parsed) {
+        const hasLocalRepoContext = Boolean(workspace.localPath);
+        const githubScanConfig = hasLocalRepoContext
+          ? {
+              message: "Fetching GitHub issues...",
+              includeIssues: true,
+              includePRs: false,
+              includePRComments: false,
+              includeRecentCommits: false,
+              maxIssues: 5,
+              maxPRs: undefined,
+              maxPRComments: undefined,
+            }
+          : {
+              message: "Fetching GitHub issues, PRs, and recent commits...",
+              includeIssues: true,
+              includePRs: true,
+              includePRComments: true,
+              includeRecentCommits: true,
+              maxIssues: 10,
+              maxPRs: 5,
+              maxPRComments: 10,
+            };
+
         await emitSessionEvent(sessionId, "scan_progress", {
           source: "github",
-          message: "Fetching GitHub issues and PRs...",
+          message: githubScanConfig.message,
           progress: 0.3,
         });
 
@@ -114,13 +137,13 @@ export async function runPlanningWorkflow(
           owner: parsed.owner,
           repo: parsed.repo,
           sessionId,
-          includeIssues: true,
-          includePRs: true,
-          includePRComments: true,  // Fetch review comments for actionable feedback
-          includeRecentCommits: true,
-          maxIssues: 10,       // Reduced from 20 to minimize token usage
-          maxPRs: 5,           // Reduced from 10 to minimize token usage
-          maxPRComments: 10,   // Limit PR comments to avoid token bloat
+          includeIssues: githubScanConfig.includeIssues,
+          includePRs: githubScanConfig.includePRs,
+          includePRComments: githubScanConfig.includePRComments,
+          includeRecentCommits: githubScanConfig.includeRecentCommits,
+          maxIssues: githubScanConfig.maxIssues,
+          maxPRs: githubScanConfig.maxPRs,
+          maxPRComments: githubScanConfig.maxPRComments,
         });
 
         allSignals.push(...githubResult.signals);

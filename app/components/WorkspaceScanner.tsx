@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { UIWorkspace } from "@/server/types/domain";
 import { API } from "@/app/utils/api-routes";
+import InlineMessage from "./InlineMessage";
 
 interface DiscoveredRepo {
   name: string;
@@ -29,10 +30,12 @@ export default function WorkspaceScanner({
   const [discoveredRepos, setDiscoveredRepos] = useState<DiscoveredRepo[]>([]);
   const [selectedRepos, setSelectedRepos] = useState<Set<string>>(new Set());
   const [scanError, setScanError] = useState<string | null>(null);
+  const [scanMessage, setScanMessage] = useState<string | null>(null);
 
-  async function handleScanWorkspaceRoots() {
+  const handleScanWorkspaceRoots = useCallback(async () => {
     setIsScanning(true);
     setScanError(null);
+    setScanMessage(null);
     setDiscoveredRepos([]);
     setSelectedRepos(new Set());
 
@@ -58,16 +61,20 @@ export default function WorkspaceScanner({
       setDiscoveredRepos(newRepos);
 
       if (newRepos.length === 0 && data.repos.length > 0) {
-        setScanError("All discovered repositories are already added as workspaces");
+        setScanMessage("All discovered repositories are already added as workspaces.");
       } else if (newRepos.length === 0) {
-        setScanError("No repositories found in workspace roots");
+        setScanMessage("No new repositories were found in the configured workspace roots.");
       }
     } catch (err) {
       setScanError(err instanceof Error ? err.message : "Scan failed");
     } finally {
       setIsScanning(false);
     }
-  }
+  }, [workspaces]);
+
+  useEffect(() => {
+    void handleScanWorkspaceRoots();
+  }, [handleScanWorkspaceRoots]);
 
   function toggleRepoSelection(repoPath: string) {
     const newSelected = new Set(selectedRepos);
@@ -92,6 +99,7 @@ export default function WorkspaceScanner({
 
     setIsLoading(true);
     setScanError(null);
+    setScanMessage(null);
 
     const reposToImport = discoveredRepos.filter((r) => selectedRepos.has(r.path));
     const errors: string[] = [];
@@ -121,6 +129,10 @@ export default function WorkspaceScanner({
 
     if (errors.length > 0) {
       setScanError(`Some imports failed: ${errors.join(", ")}`);
+    } else {
+      setScanMessage(
+        `Imported ${reposToImport.length} workspace${reposToImport.length === 1 ? "" : "s"}.`
+      );
     }
 
     // Remove imported repos from the list
@@ -131,21 +143,30 @@ export default function WorkspaceScanner({
     onWorkspacesChange();
   }
 
-  // Auto-scan on mount
-  if (!isScanning && discoveredRepos.length === 0 && !scanError) {
-    void handleScanWorkspaceRoots();
-  }
-
   return (
     <div className="folder-scanner">
       <div className="scanner-header">
-        <h3>Discovered Repositories</h3>
-        <button
-          className="btn btn-outline btn-sm"
-          onClick={onClose}
-        >
-          Back
-        </button>
+        <div>
+          <h3>Discovered Repositories</h3>
+          <p className="text-muted">Scan your configured workspace roots and import the repos you want SessionPilot to track.</p>
+        </div>
+        <div className="scanner-header-actions">
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={() => void handleScanWorkspaceRoots()}
+            disabled={isScanning || isLoading}
+            type="button"
+          >
+            {isScanning ? "Scanning..." : "Scan again"}
+          </button>
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={onClose}
+            type="button"
+          >
+            Back
+          </button>
+        </div>
       </div>
 
       {isScanning && (
@@ -154,7 +175,17 @@ export default function WorkspaceScanner({
         </div>
       )}
 
-      {scanError && <div className="error-message">{scanError}</div>}
+      {scanError && (
+        <InlineMessage tone="error" title="Scan failed">
+          <p>{scanError}</p>
+        </InlineMessage>
+      )}
+
+      {scanMessage && (
+        <InlineMessage tone="info" title="Scanner update">
+          <p>{scanMessage}</p>
+        </InlineMessage>
+      )}
 
       {discoveredRepos.length > 0 && (
         <>

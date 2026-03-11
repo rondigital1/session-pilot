@@ -9,7 +9,7 @@
  *   ?force=1  - Force refresh even if snapshot hash matches
  */
 
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { randomUUID } from "crypto";
 import { getWorkspace } from "@/server/db/queries";
 import {
@@ -22,7 +22,13 @@ import {
 import { buildProjectSnapshot } from "@/server/snapshot/buildSnapshot";
 import { generateImprovementIdeas } from "@/server/improve/generateIdeas";
 import { ProjectSnapshotV1Schema } from "@/server/snapshot/schema";
-import { addSecurityHeaders } from "@/lib/security";
+import {
+  readOptionalJsonBody,
+  secureError,
+  secureJson,
+  validateApiAccess,
+} from "@/server/api/http";
+import { improveScanRequestSchema } from "@/server/validation/api";
 
 export const runtime = "nodejs";
 
@@ -34,6 +40,11 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const securityError = validateApiAccess(request);
+  if (securityError) {
+    return securityError;
+  }
+
   try {
     const { id: workspaceId } = await params;
     const force = request.nextUrl.searchParams.get("force") === "1";
@@ -41,30 +52,19 @@ export async function POST(
     // Validate workspace
     const workspace = await getWorkspace(workspaceId);
     if (!workspace) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "Workspace not found" }, { status: 404 })
-      );
+      return secureError("Workspace not found", 404);
     }
 
     if (!workspace.localPath) {
-      return addSecurityHeaders(
-        NextResponse.json(
-          { error: "Workspace has no local path configured" },
-          { status: 400 }
-        )
-      );
+      return secureError("Workspace has no local path configured", 400);
     }
 
-    // Parse optional body
-    let goalText: string | undefined;
-    let timeBudgetMinutes: number | undefined;
-    try {
-      const body = await request.json();
-      goalText = body.goalText;
-      timeBudgetMinutes = body.timeBudgetMinutes;
-    } catch {
-      // No body is fine
+    const parsedBody = await readOptionalJsonBody(request, improveScanRequestSchema);
+    if (!parsedBody.success) {
+      return parsedBody.response;
     }
+    const goalText = parsedBody.data?.goalText?.trim() || undefined;
+    const timeBudgetMinutes = parsedBody.data?.timeBudgetMinutes;
 
     // Build snapshot
     const snapshot = await buildProjectSnapshot({
@@ -76,11 +76,10 @@ export async function POST(
     const validated = ProjectSnapshotV1Schema.safeParse(snapshot);
     if (!validated.success) {
       console.error("[Improve] Snapshot validation failed:", validated.error);
-      return addSecurityHeaders(
-        NextResponse.json(
-          { error: "Snapshot validation failed", details: validated.error.format() },
-          { status: 500 }
-        )
+      return secureError(
+        "Snapshot validation failed",
+        500,
+        validated.error.format()
       );
     }
 
@@ -90,13 +89,16 @@ export async function POST(
       if (existing && existing.snapshotHash === snapshot.snapshotHash) {
         const cachedIdeas = await getIdeasForSnapshot(existing.id);
         if (cachedIdeas.length > 0) {
-          const parsedSnapshot = JSON.parse(existing.snapshotData);
-          return addSecurityHeaders(
-            NextResponse.json({
+          const parsedSnapshot = safeParseStoredSnapshot(existing.snapshotData);
+          if (parsedSnapshot) {
+            return secureJson({
               snapshot: parsedSnapshot,
               ideas: cachedIdeas.map(formatIdeaForApi),
               cached: true,
-            })
+            });
+          }
+          console.warn(
+            `[Improve] Cached snapshot ${existing.id} could not be parsed, regenerating`
           );
         }
       }
@@ -124,7 +126,7 @@ export async function POST(
     });
 
     // Store ideas
-    const ideasToStore = ideas.map((idea, index) => ({
+    const ideasToStore = ideas.map((idea) => ({
       id: `idea_${randomUUID()}`,
       workspaceId,
       snapshotId,
@@ -144,19 +146,15 @@ export async function POST(
 
     const storedIdeas = await storeIdeas(ideasToStore);
 
-    return addSecurityHeaders(
-      NextResponse.json({
-        snapshot,
-        ideas: storedIdeas.map(formatIdeaForApi),
-        cached: false,
-      })
-    );
+    return secureJson({
+      snapshot,
+      ideas: storedIdeas.map(formatIdeaForApi),
+      cached: false,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("[Improve] POST failed:", message);
-    return addSecurityHeaders(
-      NextResponse.json({ error: `Improve scan failed: ${message}` }, { status: 500 })
-    );
+    return secureError(`Improve scan failed: ${message}`, 500);
   }
 }
 
@@ -165,45 +163,45 @@ export async function POST(
 // =============================================================================
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const securityError = validateApiAccess(request);
+  if (securityError) {
+    return securityError;
+  }
+
   try {
     const { id: workspaceId } = await params;
 
     const workspace = await getWorkspace(workspaceId);
     if (!workspace) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "Workspace not found" }, { status: 404 })
-      );
+      return secureError("Workspace not found", 404);
     }
 
     const latestSnapshot = await getLatestSnapshot(workspaceId);
     if (!latestSnapshot) {
-      return addSecurityHeaders(
-        NextResponse.json({
-          snapshot: null,
-          ideas: [],
-          message: "No improvement scan has been run yet",
-        })
-      );
+      return secureJson({
+        snapshot: null,
+        ideas: [],
+        message: "No improvement scan has been run yet",
+      });
     }
 
     const ideas = await getIdeasForSnapshot(latestSnapshot.id);
-    const parsedSnapshot = JSON.parse(latestSnapshot.snapshotData);
+    const parsedSnapshot = safeParseStoredSnapshot(latestSnapshot.snapshotData);
+    if (!parsedSnapshot) {
+      return secureError("Stored snapshot data is invalid", 500);
+    }
 
-    return addSecurityHeaders(
-      NextResponse.json({
-        snapshot: parsedSnapshot,
-        ideas: ideas.map(formatIdeaForApi),
-      })
-    );
+    return secureJson({
+      snapshot: parsedSnapshot,
+      ideas: ideas.map(formatIdeaForApi),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("[Improve] GET failed:", message);
-    return addSecurityHeaders(
-      NextResponse.json({ error: `Failed to fetch improvements: ${message}` }, { status: 500 })
-    );
+    return secureError(`Failed to fetch improvements: ${message}`, 500);
   }
 }
 
@@ -241,4 +239,12 @@ function formatIdeaForApi(idea: {
     status: idea.status,
     createdAt: idea.createdAt,
   };
+}
+
+function safeParseStoredSnapshot(rawSnapshot: string) {
+  try {
+    return JSON.parse(rawSnapshot);
+  } catch {
+    return null;
+  }
 }

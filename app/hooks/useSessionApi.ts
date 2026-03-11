@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type {
   CreateTaskRequest,
   GenerateChecklistRequest,
@@ -21,6 +21,18 @@ interface ApiTask {
   notes?: string | null;
   checklist?: UITaskChecklistItem[];
   context?: UITaskContext;
+}
+
+async function getApiErrorMessage(
+  response: Response,
+  fallbackMessage: string
+): Promise<string> {
+  try {
+    const data = (await response.json()) as { error?: string };
+    return data.error || fallbackMessage;
+  } catch {
+    return fallbackMessage;
+  }
 }
 
 function mapApiTask(apiTask: ApiTask, existing?: UITask): UITask {
@@ -51,6 +63,12 @@ export function useSessionApi({
   addCreatedTask,
   updateTaskInState,
 }: UseSessionApiOptions) {
+  const tasksRef = useRef(tasks);
+
+  useEffect(() => {
+    tasksRef.current = tasks;
+  }, [tasks]);
+
   const syncTasksFromApi = useCallback(async () => {
     if (!sessionId) return;
 
@@ -60,14 +78,14 @@ export function useSessionApi({
       const data = (await response.json()) as { tasks?: ApiTask[] };
       if (!data.tasks) return;
       const mapped = data.tasks.map((apiTask) => {
-        const existing = tasks.find((t) => t.id === apiTask.id);
+        const existing = tasksRef.current.find((t) => t.id === apiTask.id);
         return mapApiTask(apiTask, existing);
       });
       setTasksFromApi(mapped);
     } catch (error) {
       console.error("Failed to sync tasks:", error);
     }
-  }, [sessionId, tasks, setTasksFromApi]);
+  }, [sessionId, setTasksFromApi]);
 
   const createTaskFromApi = useCallback(
     async (payload: CreateTaskRequest): Promise<UITask | null> => {
@@ -80,7 +98,11 @@ export function useSessionApi({
           body: JSON.stringify(payload),
         });
 
-        if (!response.ok) return null;
+        if (!response.ok) {
+          throw new Error(
+            await getApiErrorMessage(response, "Failed to create task")
+          );
+        }
 
         const data = (await response.json()) as { task?: ApiTask };
         if (!data.task) return null;
@@ -90,7 +112,7 @@ export function useSessionApi({
         return mapped;
       } catch (error) {
         console.error("Failed to create task:", error);
-        return null;
+        throw error;
       }
     },
     [sessionId, addCreatedTask]
@@ -107,7 +129,11 @@ export function useSessionApi({
           body: JSON.stringify(payload),
         });
 
-        if (!response.ok) return [];
+        if (!response.ok) {
+          throw new Error(
+            await getApiErrorMessage(response, "Failed to generate checklist")
+          );
+        }
 
         const data = (await response.json()) as { items?: string[] };
         if (!Array.isArray(data.items)) return [];
@@ -118,7 +144,7 @@ export function useSessionApi({
           .filter((item) => item.length > 0);
       } catch (error) {
         console.error("Failed to generate checklist:", error);
-        return [];
+        throw error;
       }
     },
     [sessionId]
@@ -128,7 +154,7 @@ export function useSessionApi({
     async (taskId: string, updates: UpdateTaskRequest): Promise<UITask | null> => {
       if (!sessionId) return null;
 
-      const currentTask = tasks.find((task) => task.id === taskId);
+      const currentTask = tasksRef.current.find((task) => task.id === taskId);
       const status = updates.status ?? currentTask?.status ?? "pending";
 
       try {
@@ -147,7 +173,11 @@ export function useSessionApi({
           }),
         });
 
-        if (!response.ok) return null;
+        if (!response.ok) {
+          const message = await getApiErrorMessage(response, "Failed to update task");
+          console.error("Failed to update task:", message);
+          return null;
+        }
 
         const data = (await response.json()) as { task?: ApiTask };
         if (!data.task) return null;
@@ -160,7 +190,7 @@ export function useSessionApi({
         return null;
       }
     },
-    [sessionId, tasks, updateTaskInState]
+    [sessionId, updateTaskInState]
   );
 
   return {

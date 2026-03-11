@@ -15,6 +15,8 @@ const GIT_STATUS_PRIORITY: Record<string, number> = {
   untracked: 0.2,
 };
 
+const RECENT_COMMIT_BASE_PRIORITY = 0.45;
+
 /**
  * Extract TODO/FIXME/HACK/XXX comments from file content.
  * @param sessionId - Session ID to make signal IDs unique per session
@@ -93,6 +95,42 @@ export function parseGitStatus(output: string, sessionId?: string): ScanSignal[]
     });
 }
 
+/**
+ * Parse git log output formatted as:
+ * %H%x1f%an%x1f%aI%x1f%s%x1e
+ * @param sessionId - Session ID to make signal IDs unique per session
+ */
+export function parseGitLog(output: string, sessionId?: string): ScanSignal[] {
+  if (!output.trim()) return [];
+
+  const idPrefix = sessionId ? `${sessionId}_` : "";
+
+  return output
+    .split("\x1e")
+    .map((record) => record.trim())
+    .filter(Boolean)
+    .map((record, idx) => {
+      const [sha = `unknown-${idx}`, author = "unknown", date = "", subject = ""] =
+        record.split("\x1f");
+      const commitTitle = subject.trim() || sha.slice(0, 7);
+
+      return {
+        id: `${idPrefix}gitlog_${sha}`,
+        source: "local",
+        signalType: "recent_commit",
+        title: `Recent local commit: ${commitTitle}`,
+        description: buildCommitDescription(author, date),
+        priority: getRecentCommitPriority(commitTitle, date),
+        metadata: {
+          sha,
+          author,
+          date: date || undefined,
+          subject: commitTitle,
+        },
+      };
+    });
+}
+
 function getGitFileStatus(staged: string, unstaged: string): string {
   if (staged === "?" && unstaged === "?") return "untracked";
   if (
@@ -106,6 +144,44 @@ function getGitFileStatus(staged: string, unstaged: string): string {
   if (staged === "D" || unstaged === "D") return "deleted";
   if (staged === "A" || unstaged === "A") return "added";
   return "modified";
+}
+
+function buildCommitDescription(author: string, date?: string): string | undefined {
+  const details = [];
+  if (author) {
+    details.push(`Author: ${author}`);
+  }
+  if (date) {
+    details.push(`Date: ${date}`);
+  }
+  return details.length > 0 ? details.join(" | ") : undefined;
+}
+
+function getRecentCommitPriority(subject: string, date?: string): number {
+  let priority = RECENT_COMMIT_BASE_PRIORITY;
+  const normalizedSubject = subject.toLowerCase();
+
+  if (
+    normalizedSubject.includes("fix") ||
+    normalizedSubject.includes("bug") ||
+    normalizedSubject.includes("hotfix")
+  ) {
+    priority += 0.1;
+  }
+
+  if (date) {
+    const createdAt = new Date(date);
+    if (!Number.isNaN(createdAt.getTime())) {
+      const ageMs = Date.now() - createdAt.getTime();
+      if (ageMs <= 3 * 24 * 60 * 60 * 1000) {
+        priority += 0.15;
+      } else if (ageMs >= 14 * 24 * 60 * 60 * 1000) {
+        priority -= 0.1;
+      }
+    }
+  }
+
+  return Math.min(1, Math.max(0, priority));
 }
 
 /**

@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { asc, eq, inArray } from "drizzle-orm";
 import { getDb } from "../client";
 import { ensureInitialized } from "../init";
 import {
@@ -22,7 +22,11 @@ export async function createSessionTask(data: NewSessionTask): Promise<SessionTa
 export async function listSessionTasks(sessionId: string): Promise<SessionTask[]> {
   await ensureInitialized();
   const db = getDb();
-  return db.select().from(sessionTasks).where(eq(sessionTasks.sessionId, sessionId));
+  return db
+    .select()
+    .from(sessionTasks)
+    .where(eq(sessionTasks.sessionId, sessionId))
+    .orderBy(asc(sessionTasks.order), asc(sessionTasks.createdAt));
 }
 
 export async function getTask(taskId: string): Promise<SessionTask | undefined> {
@@ -84,5 +88,6 @@ export async function createSessionTasksBulk(
   return db
     .select()
     .from(sessionTasks)
-    .where(inArray(sessionTasks.id, tasks.map((t) => t.id)));
+    .where(inArray(sessionTasks.id, tasks.map((t) => t.id)))
+    .orderBy(asc(sessionTasks.order), asc(sessionTasks.createdAt));
 }

@@ -1,8 +1,14 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { getSession } from "@/server/db/queries";
 import { generateTaskChecklist } from "@/server/agent";
 import type { GenerateChecklistRequest } from "@/server/types/domain";
-import { validateCsrfProtection, addSecurityHeaders } from "@/lib/security";
+import {
+  readJsonBody,
+  secureError,
+  secureJson,
+  validateApiAccess,
+} from "@/server/api/http";
+import { generateChecklistRequestSchema } from "@/server/validation/api";
 
 // Force Node.js runtime
 export const runtime = "nodejs";
@@ -15,27 +21,25 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  // SECURITY: Validate CSRF protection
-  const csrfError = validateCsrfProtection(request);
-  if (csrfError) {
-    return addSecurityHeaders(csrfError);
+  const securityError = validateApiAccess(request);
+  if (securityError) {
+    return securityError;
   }
 
   try {
     const { id: sessionId } = await params;
-    const body = (await request.json()) as GenerateChecklistRequest;
-
-    if (!body.description?.trim()) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "description is required" }, { status: 400 })
-      );
+    const parsedBody = await readJsonBody<GenerateChecklistRequest>(
+      request,
+      generateChecklistRequestSchema
+    );
+    if (!parsedBody.success) {
+      return parsedBody.response;
     }
+    const body = parsedBody.data;
 
     const session = await getSession(sessionId);
     if (!session) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "Session not found" }, { status: 404 })
-      );
+      return secureError("Session not found", 404);
     }
 
     const items = await generateTaskChecklist({
@@ -43,11 +47,9 @@ export async function POST(
       description: body.description.trim(),
     });
 
-    return addSecurityHeaders(NextResponse.json({ items }));
+    return secureJson({ items });
   } catch (error) {
     console.error("Failed to generate checklist:", error);
-    return addSecurityHeaders(
-      NextResponse.json({ error: "Failed to generate checklist" }, { status: 500 })
-    );
+    return secureError("Failed to generate checklist", 500);
   }
 }

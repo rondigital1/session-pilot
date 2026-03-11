@@ -130,8 +130,11 @@ export default function WorkspaceForm({
       {error && <div className="error-message">{error}</div>}
 
       <div className="form-group">
-        <label className="form-label">Name</label>
+        <label className="form-label" htmlFor="workspace-name">
+          Name
+        </label>
         <input
+          id="workspace-name"
           type="text"
           className={`form-input ${fieldErrors.name ? "form-input-error" : ""}`}
           placeholder="My Project"
@@ -148,8 +151,11 @@ export default function WorkspaceForm({
       </div>
 
       <div className="form-group">
-        <label className="form-label">Local Path</label>
+        <label className="form-label" htmlFor="workspace-local-path">
+          Local Path
+        </label>
         <input
+          id="workspace-local-path"
           type="text"
           className={`form-input ${fieldErrors.localPath ? "form-input-error" : ""}`}
           placeholder="/Users/you/projects/my-project"
@@ -169,8 +175,11 @@ export default function WorkspaceForm({
       </div>
 
       <div className="form-group">
-        <label className="form-label">GitHub Repository</label>
+        <label className="form-label" htmlFor="workspace-github-repo">
+          GitHub Repository
+        </label>
         <input
+          id="workspace-github-repo"
           type="text"
           className={`form-input ${fieldErrors.githubRepo ? "form-input-error" : ""}`}
           placeholder="owner/repo"

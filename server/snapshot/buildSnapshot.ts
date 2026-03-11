@@ -14,6 +14,7 @@ import * as path from "path";
 import { createHash } from "crypto";
 import { runCommand } from "@/server/utils/shell";
 import { findFiles } from "@/server/utils/fs";
+import { stableStringify } from "@/server/utils/stableJson";
 import type {
   ProjectSnapshotV1,
   SnapshotSignal,
@@ -402,16 +403,8 @@ function buildSignals(health: Health, hotspots: Hotspots): SnapshotSignal[] {
   return signals.sort((a, b) => a.key.localeCompare(b.key));
 }
 
-// =============================================================================
-// Canonical JSON + Hash
-// =============================================================================
-
-function canonicalJson(obj: unknown): string {
-  return JSON.stringify(obj, Object.keys(obj as Record<string, unknown>).sort());
-}
-
 function computeSnapshotHash(snapshot: Omit<ProjectSnapshotV1, "snapshotHash" | "createdAt">): string {
-  const canonical = canonicalJson(snapshot);
+  const canonical = stableStringify(snapshot);
   return createHash("sha256").update(canonical).digest("hex");
 }
 

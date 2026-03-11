@@ -1,9 +1,15 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { randomUUID } from "crypto";
 import { listWorkspaces, createWorkspace } from "@/server/db/queries";
 import type { CreateWorkspaceRequest } from "@/server/types/domain";
 import { validateWorkspace } from "@/lib/workspace";
-import { validateCsrfProtection, addSecurityHeaders } from "@/lib/security";
+import {
+  readJsonBody,
+  secureError,
+  secureJson,
+  validateApiAccess,
+} from "@/server/api/http";
+import { createWorkspaceRequestSchema } from "@/server/validation/api";
 
 // Force Node.js runtime
 export const runtime = "nodejs";
@@ -13,20 +19,17 @@ export const runtime = "nodejs";
  * List all workspaces
  */
 export async function GET(request: NextRequest) {
-  // SECURITY: Validate CSRF even for GET (prevents info leakage via CORS)
-  const csrfError = validateCsrfProtection(request);
-  if (csrfError) {
-    return addSecurityHeaders(csrfError);
+  const securityError = validateApiAccess(request);
+  if (securityError) {
+    return securityError;
   }
 
   try {
     const workspaces = await listWorkspaces();
-    return addSecurityHeaders(NextResponse.json({ workspaces }));
+    return secureJson({ workspaces });
   } catch (error) {
     console.error("Failed to list workspaces:", error);
-    return addSecurityHeaders(
-      NextResponse.json({ error: "Failed to list workspaces" }, { status: 500 })
-    );
+    return secureError("Failed to list workspaces", 500);
   }
 }
 
@@ -46,43 +49,33 @@ export async function GET(request: NextRequest) {
  * At least one of localPath or githubRepo must be provided.
  */
 export async function POST(request: NextRequest) {
-  // SECURITY: Validate CSRF protection
-  const csrfError = validateCsrfProtection(request);
-  if (csrfError) {
-    return addSecurityHeaders(csrfError);
+  const securityError = validateApiAccess(request);
+  if (securityError) {
+    return securityError;
   }
 
   try {
-    const body: CreateWorkspaceRequest = await request.json();
-
-    // Validate required fields
-    if (!body.name) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "name is required" }, { status: 400 })
-      );
+    const parsedBody = await readJsonBody<CreateWorkspaceRequest>(
+      request,
+      createWorkspaceRequestSchema
+    );
+    if (!parsedBody.success) {
+      return parsedBody.response;
     }
-
-    if (!body.localPath && !body.githubRepo) {
-      return addSecurityHeaders(
-        NextResponse.json(
-          { error: "Either localPath or githubRepo must be provided" },
-          { status: 400 }
-        )
-      );
-    }
+    const body = parsedBody.data;
+    const localPath = body.localPath?.trim() || undefined;
+    const githubRepo = body.githubRepo?.trim() || undefined;
 
     // Validate workspace configuration
     const validation = await validateWorkspace({
-      name: body.name,
-      localPath: body.localPath,
-      githubRepo: body.githubRepo,
+      name: body.name.trim(),
+      localPath,
+      githubRepo,
       verifyGitHubRepo: Boolean(process.env.GITHUB_TOKEN),
     });
 
     if (!validation.valid) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: validation.error }, { status: 400 })
-      );
+      return secureError(validation.error || "Invalid workspace", 400);
     }
 
     const id = generateId();
@@ -90,19 +83,17 @@ export async function POST(request: NextRequest) {
 
     const workspace = await createWorkspace({
       id,
-      name: body.name,
-      localPath: body.localPath || null,
-      githubRepo: body.githubRepo || null,
+      name: body.name.trim(),
+      localPath: localPath || null,
+      githubRepo: githubRepo || null,
       createdAt: now,
       updatedAt: now,
     });
 
-    return addSecurityHeaders(NextResponse.json({ workspace }, { status: 201 }));
+    return secureJson({ workspace }, 201);
   } catch (error) {
     console.error("Failed to create workspace:", error);
-    return addSecurityHeaders(
-      NextResponse.json({ error: "Failed to create workspace" }, { status: 500 })
-    );
+    return secureError("Failed to create workspace", 500);
   }
 }
 

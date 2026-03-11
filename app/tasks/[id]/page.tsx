@@ -1,10 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import AppShell from "@/app/components/AppShell";
+import InlineMessage from "@/app/components/InlineMessage";
+import { API } from "@/app/utils/api-routes";
 import { useSession } from "@/app/session-context";
-import { useEffect, useState } from "react";
+import type { SessionState, UISession } from "@/server/types/domain";
+import { useEffect, useRef, useState } from "react";
 
 function getParamId(param: string | string[] | undefined) {
   if (!param) {
@@ -15,25 +18,136 @@ function getParamId(param: string | string[] | undefined) {
 
 export default function TaskDetailPage() {
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const taskId = getParamId(params?.id);
   const {
     tasks,
     toggleChecklistItem,
     updateTaskNotes,
     sessionId,
+    setSessionId,
+    setSessionState,
+    setUserGoal,
+    setTimeBudget,
+    setFocusWeights,
+    setSummary,
+    setSessionMetrics,
+    setTasks,
+    setSessionStartedAt,
     syncTasksFromApi,
     patchTask,
     sessionState,
   } = useSession();
+  const linkedSessionId = searchParams.get("session")?.trim() || null;
+  const attemptedLinkedSessionRef = useRef<string | null>(null);
+  const [recoveryState, setRecoveryState] = useState<"idle" | "loading" | "error">(
+    "idle"
+  );
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
 
   const task = tasks.find((item) => item.id === taskId);
 
+  function getRecoveredState(session: UISession): SessionState {
+    if (session.status === "completed") {
+      return "summary";
+    }
+
+    if (session.status === "planning") {
+      return "planning";
+    }
+
+    return "session";
+  }
+
   useEffect(() => {
-    if (task || !sessionId) {
+    if (
+      task ||
+      !linkedSessionId ||
+      linkedSessionId === sessionId ||
+      attemptedLinkedSessionRef.current === linkedSessionId
+    ) {
+      return;
+    }
+
+    const recoverySessionId = linkedSessionId;
+    attemptedLinkedSessionRef.current = recoverySessionId;
+    let cancelled = false;
+
+    async function recoverLinkedSession() {
+      setRecoveryState("loading");
+      setRecoveryError(null);
+
+      try {
+        const response = await fetch(API.session(recoverySessionId), {
+          cache: "no-store",
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.session) {
+          throw new Error(data.error || "Unable to recover the linked session.");
+        }
+
+        const recoveredSession = data.session as UISession;
+
+        if (cancelled) {
+          return;
+        }
+
+        setSessionId(recoveredSession.id);
+        setSessionState(getRecoveredState(recoveredSession));
+        setUserGoal(recoveredSession.userGoal);
+        setTimeBudget(recoveredSession.timeBudgetMinutes);
+        setFocusWeights(recoveredSession.focusWeights);
+        setTasks(recoveredSession.tasks);
+        setSummary(recoveredSession.summary ?? "");
+        setSessionMetrics(recoveredSession.metrics ?? null);
+        setSessionStartedAt(recoveredSession.startedAt ?? null);
+        setRecoveryState("idle");
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setRecoveryState("error");
+        setRecoveryError(
+          error instanceof Error
+            ? error.message
+            : "Unable to recover the linked session."
+        );
+      }
+    }
+
+    void recoverLinkedSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    linkedSessionId,
+    sessionId,
+    setFocusWeights,
+    setSessionId,
+    setSessionMetrics,
+    setSessionStartedAt,
+    setSessionState,
+    setSummary,
+    setTasks,
+    setTimeBudget,
+    setUserGoal,
+    task,
+  ]);
+
+  useEffect(() => {
+    if (
+      task ||
+      !sessionId ||
+      recoveryState === "loading" ||
+      (linkedSessionId && linkedSessionId !== sessionId)
+    ) {
       return;
     }
     void syncTasksFromApi();
-  }, [sessionId, syncTasksFromApi, task]);
+  }, [linkedSessionId, recoveryState, sessionId, syncTasksFromApi, task]);
 
   const showTaskNav = sessionState === "session" && tasks.length > 0;
   const [isEditing, setIsEditing] = useState(false);
@@ -42,6 +156,19 @@ export default function TaskDetailPage() {
   const [editEstimatedMinutes, setEditEstimatedMinutes] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
   const [isSavingEdits, setIsSavingEdits] = useState(false);
+  const [notesSaveState, setNotesSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+
+  useEffect(() => {
+    if (notesSaveState !== "saved") {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setNotesSaveState("idle");
+    }, 2200);
+
+    return () => window.clearTimeout(timeout);
+  }, [notesSaveState]);
 
   useEffect(() => {
     if (!task || isEditing) {
@@ -52,12 +179,36 @@ export default function TaskDetailPage() {
     setEditEstimatedMinutes(task.estimatedMinutes ? String(task.estimatedMinutes) : "");
   }, [isEditing, task]);
 
+  if (!task && recoveryState === "loading") {
+    return (
+      <AppShell active="task" showTaskNav={showTaskNav}>
+        <section className="panel empty-state">
+          <h2>Recovering task context</h2>
+          <p>Reloading the linked session so this task page can open with the right context.</p>
+        </section>
+      </AppShell>
+    );
+  }
+
   if (!task) {
     return (
       <AppShell active="task" showTaskNav={showTaskNav}>
         <section className="panel empty-state">
           <h2>Task not found</h2>
-          <p>We couldn’t load this task. Head back to the session list.</p>
+          <p>
+            {recoveryError
+              ? recoveryError
+              : linkedSessionId
+                ? "We restored the linked session, but this task is no longer part of it. Return to SessionPilot and reopen the task from the current task list."
+                : sessionId
+                  ? "We couldn't find this task in the current session. Return to the session view and reopen it from the task list."
+                  : "Task detail pages work best when opened from an active session. Return to SessionPilot and reopen the task from the current task list."}
+          </p>
+          {!linkedSessionId && (
+            <InlineMessage tone="info" title="Tip for direct links">
+              <p>Open task links from an active session so SessionPilot can restore the right session context after a refresh.</p>
+            </InlineMessage>
+          )}
           <Link className="btn btn-primary" href="/">
             Return to session
           </Link>
@@ -128,6 +279,21 @@ export default function TaskDetailPage() {
     );
     setEditError(null);
     setIsEditing(false);
+  }
+
+  async function handleSaveNotes(notes: string) {
+    setNotesSaveState("saving");
+    const updated = await patchTask(currentTask.id, {
+      status: currentTask.status,
+      notes,
+    });
+
+    if (!updated) {
+      setNotesSaveState("error");
+      return;
+    }
+
+    setNotesSaveState("saved");
   }
 
   return (
@@ -327,19 +493,30 @@ export default function TaskDetailPage() {
             <h3>Notes</h3>
             <p>Capture key decisions and next steps.</p>
           </div>
+          {notesSaveState === "error" && (
+            <InlineMessage tone="error" title="Notes not saved">
+              <p>We couldn't save your notes. Try again after a moment.</p>
+            </InlineMessage>
+          )}
+          {notesSaveState === "saving" && (
+            <p className="save-status" role="status" aria-live="polite">
+              Saving notes...
+            </p>
+          )}
+          {notesSaveState === "saved" && (
+            <p className="save-status save-status-success" role="status" aria-live="polite">
+              Notes saved
+            </p>
+          )}
           <textarea
             className="form-textarea"
             placeholder="Add your notes, commands, or decisions..."
             value={currentTask.notes || ""}
-            onChange={(event) =>
-              updateTaskNotes(currentTask.id, event.target.value)
-            }
-            onBlur={(event) =>
-              patchTask(currentTask.id, {
-                status: currentTask.status,
-                notes: event.target.value,
-              })
-            }
+            onChange={(event) => {
+              setNotesSaveState("idle");
+              updateTaskNotes(currentTask.id, event.target.value);
+            }}
+            onBlur={(event) => void handleSaveNotes(event.target.value)}
           />
         </section>
 

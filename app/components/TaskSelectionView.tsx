@@ -1,10 +1,11 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   CreateTaskRequest,
   GenerateChecklistRequest,
   UITask,
 } from "@/server/types/domain";
 import AddTaskForm from "./AddTaskForm";
+import InlineMessage from "./InlineMessage";
 
 interface TaskSelectionViewProps {
   tasks: UITask[];
@@ -15,6 +16,7 @@ interface TaskSelectionViewProps {
   onAddTask: (task: CreateTaskRequest) => Promise<UITask | null>;
   onGenerateChecklist: (payload: GenerateChecklistRequest) => Promise<string[]>;
   isLoading: boolean;
+  plannerNotice?: string | null;
 }
 
 export default function TaskSelectionView({
@@ -26,12 +28,32 @@ export default function TaskSelectionView({
   onAddTask,
   onGenerateChecklist,
   isLoading,
+  plannerNotice,
 }: TaskSelectionViewProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(
     () => new Set(tasks.map((t) => t.id))
   );
   const [showAddForm, setShowAddForm] = useState(false);
   const [isAddingTask, setIsAddingTask] = useState(false);
+
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (tasks.length === 0) {
+        return new Set();
+      }
+
+      const availableTaskIds = new Set(tasks.map((task) => task.id));
+      const next = new Set(
+        Array.from(prev).filter((taskId) => availableTaskIds.has(taskId))
+      );
+
+      if (prev.size === 0 || next.size === 0) {
+        return new Set(tasks.map((task) => task.id));
+      }
+
+      return next;
+    });
+  }, [tasks]);
 
   const selectedTasks = useMemo(
     () => tasks.filter((t) => selectedIds.has(t.id)),
@@ -86,10 +108,10 @@ export default function TaskSelectionView({
     <div className="stack">
       <section className="hero">
         <div>
-          <p className="eyebrow">Select tasks</p>
+          <p className="eyebrow">Review session draft</p>
           <h2>{userGoal || "Choose your focus"}</h2>
           <p className="hero-subtitle">
-            {tasks.length} tasks generated. Select the ones you want to work on.
+            Review the current draft and choose what you want to work on right now.
           </p>
         </div>
         <div className="hero-meta">
@@ -97,12 +119,18 @@ export default function TaskSelectionView({
         </div>
       </section>
 
+      {plannerNotice && (
+        <InlineMessage tone="info" title="Planning note">
+          <p>{plannerNotice}</p>
+        </InlineMessage>
+      )}
+
       <div className="grid">
         <section className="panel">
           <div className="panel-header row">
             <div>
-              <h3>Generated Tasks</h3>
-              <p>Check the tasks you want to include in this session.</p>
+              <h3>Session tasks</h3>
+              <p>Check the work you want to carry into the active session.</p>
             </div>
             <div className="selection-actions">
               <button
@@ -135,6 +163,7 @@ export default function TaskSelectionView({
                     className="task-checkbox"
                     checked={isSelected}
                     onChange={() => handleToggle(task.id)}
+                    aria-label={`Select task ${task.title}`}
                   />
                   <div className="task-content">
                     <span className="task-title">{task.title}</span>
@@ -155,7 +184,17 @@ export default function TaskSelectionView({
           </ul>
 
           {tasks.length === 0 && !showAddForm && (
-            <p className="text-muted text-center">No tasks generated</p>
+            <div className="empty-state empty-state-panel">
+              <p className="text-muted">
+                No tasks are available yet. You can add one manually or reload the latest planning output.
+              </p>
+            </div>
+          )}
+
+          {tasks.length > 0 && selectedTasks.length === 0 && (
+            <InlineMessage tone="info" title="Select at least one task">
+              <p>Choose a task from the draft or add a custom one before starting the session.</p>
+            </InlineMessage>
           )}
 
           {showAddForm ? (
@@ -222,15 +261,18 @@ export default function TaskSelectionView({
               onClick={handleConfirm}
               disabled={isLoading || selectedTasks.length === 0}
             >
-              {isLoading ? "Starting..." : `Start session (${selectedTasks.length} tasks)`}
+              {isLoading ? "Starting..." : `Start work (${selectedTasks.length} tasks)`}
             </button>
             <button
               className="btn btn-outline btn-full"
               onClick={onRegenerate}
               disabled={isLoading}
             >
-              Regenerate tasks
+              Reconnect planning output
             </button>
+            <p className="form-hint">
+              Use this if planning was interrupted in this browser. It replays the latest planning stream instead of making a new plan.
+            </p>
           </div>
         </aside>
       </div>

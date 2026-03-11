@@ -4,8 +4,9 @@
  * Handles CRUD for project snapshots, improvement ideas, and idea feedback.
  */
 
-import { eq, desc, and, gte } from "drizzle-orm";
-import { getDb, initializeDb } from "./client";
+import { eq, desc, and, gte, inArray } from "drizzle-orm";
+import { getDb } from "./client";
+import { ensureInitialized } from "./init";
 import {
   projectSnapshots,
   improvementIdeas,
@@ -17,28 +18,6 @@ import {
   type IdeaFeedbackRow,
   type NewIdeaFeedback,
 } from "./schema";
-
-// Reuse the same initialization guard from queries.ts
-let isInitialized = false;
-let initializationPromise: Promise<void> | null = null;
-
-async function ensureInitialized() {
-  if (isInitialized) {
-    return;
-  }
-
-  if (!initializationPromise) {
-    initializationPromise = initializeDb()
-      .then(() => {
-        isInitialized = true;
-      })
-      .finally(() => {
-        initializationPromise = null;
-      });
-  }
-
-  await initializationPromise;
-}
 
 // =============================================================================
 // Project Snapshot Queries
@@ -99,22 +78,18 @@ export async function getSnapshot(id: string): Promise<ProjectSnapshot | undefin
  * Store multiple improvement ideas
  */
 export async function storeIdeas(ideas: NewImprovementIdea[]): Promise<ImprovementIdea[]> {
-  await ensureInitialized();
-  const db = getDb();
-  const created: ImprovementIdea[] = [];
-
-  for (const idea of ideas) {
-    await db.insert(improvementIdeas).values(idea);
-    const result = await db
-      .select()
-      .from(improvementIdeas)
-      .where(eq(improvementIdeas.id, idea.id));
-    if (result[0]) {
-      created.push(result[0]);
-    }
+  if (ideas.length === 0) {
+    return [];
   }
 
-  return created;
+  await ensureInitialized();
+  const db = getDb();
+  await db.insert(improvementIdeas).values(ideas);
+  return db
+    .select()
+    .from(improvementIdeas)
+    .where(inArray(improvementIdeas.id, ideas.map((idea) => idea.id)))
+    .orderBy(desc(improvementIdeas.score), desc(improvementIdeas.createdAt));
 }
 
 /**
@@ -237,4 +212,27 @@ export async function getFeedbackForIdea(
     .from(ideaFeedback)
     .where(eq(ideaFeedback.ideaId, ideaId))
     .orderBy(desc(ideaFeedback.createdAt));
+}
+
+export async function deleteImproveDataForWorkspace(workspaceId: string): Promise<void> {
+  await ensureInitialized();
+  const db = getDb();
+
+  const workspaceIdeaIds = await db
+    .select({ id: improvementIdeas.id })
+    .from(improvementIdeas)
+    .where(eq(improvementIdeas.workspaceId, workspaceId));
+
+  const ideaIds = workspaceIdeaIds.map((idea) => idea.id);
+  if (ideaIds.length > 0) {
+    await db.delete(ideaFeedback).where(inArray(ideaFeedback.ideaId, ideaIds));
+  }
+
+  await db
+    .delete(improvementIdeas)
+    .where(eq(improvementIdeas.workspaceId, workspaceId));
+
+  await db
+    .delete(projectSnapshots)
+    .where(eq(projectSnapshots.workspaceId, workspaceId));
 }

@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "../client";
 import { ensureInitialized } from "../init";
+import { deleteImproveDataForWorkspace } from "../improveQueries";
 import {
   workspaces,
   sessions,
@@ -50,6 +51,8 @@ export async function updateWorkspace(
 export async function deleteWorkspace(id: string): Promise<boolean> {
   await ensureInitialized();
   const db = getDb();
+
+  await deleteImproveDataForWorkspace(id);
 
   const workspaceSessions = await db
     .select({ id: sessions.id })

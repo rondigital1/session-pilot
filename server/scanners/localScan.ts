@@ -1,7 +1,7 @@
 import type { ScanSignal } from "@/server/types/domain";
 import { runCommand } from "@/server/utils/shell";
 import { findFiles, readFiles } from "@/server/utils/fs";
-import { extractTodos, parseGitStatus } from "./parsers";
+import { extractTodos, parseGitLog, parseGitStatus } from "./parsers";
 
 const DEFAULT_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx"];
 const DEFAULT_IGNORE = ["node_modules/**", ".git/**", "dist/**", "build/**"];
@@ -58,9 +58,22 @@ export async function scanLocalRepository(
         10000 // 10 second timeout for git status
       );
       signals.push(...parseGitStatus(gitOutput, sessionId));
+
+      const gitLogOutput = await runCommand(
+        "git",
+        [
+          "log",
+          "--max-count=5",
+          "--date=iso-strict",
+          "--pretty=format:%H%x1f%an%x1f%aI%x1f%s%x1e",
+        ],
+        workspacePath,
+        10000 // 10 second timeout for recent commit history
+      );
+      signals.push(...parseGitLog(gitLogOutput, sessionId));
     } catch (gitError) {
       // Git may not be available or directory may not be a repo
-      errors.push(`Git status failed: ${gitError}`);
+      errors.push(`Git scan failed: ${gitError}`);
     }
 
     // NOTE: Test execution has been removed for security reasons.
@@ -75,4 +88,4 @@ export async function scanLocalRepository(
 }
 
 // Re-export parsers for direct use if needed
-export { extractTodos, parseGitStatus } from "./parsers";
+export { extractTodos, parseGitLog, parseGitStatus } from "./parsers";

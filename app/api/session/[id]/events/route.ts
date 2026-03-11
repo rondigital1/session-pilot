@@ -2,6 +2,8 @@ import { NextRequest } from "next/server";
 import { getSession } from "@/server/db/queries";
 import { pollSessionEvents } from "@/lib/session/events";
 import { safeClose } from "@/lib/sse";
+import { addSecurityHeaders } from "@/lib/security";
+import { secureError, validateApiAccess } from "@/server/api/http";
 
 // Force Node.js runtime
 export const runtime = "nodejs";
@@ -34,6 +36,11 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const securityError = validateApiAccess(request);
+  if (securityError) {
+    return securityError;
+  }
+
   const { id: sessionId } = await params;
 
   // Validate session exists
@@ -42,18 +49,12 @@ export async function GET(
     session = await getSession(sessionId);
   } catch (error) {
     console.error("[SSE Events] Database error fetching session:", error);
-    return new Response(
-      JSON.stringify({ error: "Database error", details: String(error) }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    return secureError("Database error", 500, String(error));
   }
   
   if (!session) {
     console.error("[SSE Events] Session not found:", sessionId);
-    return new Response(
-      JSON.stringify({ error: "Session not found", sessionId }),
-      { status: 404, headers: { "Content-Type": "application/json" } }
-    );
+    return secureError("Session not found", 404, { sessionId });
   }
 
   const encoder = new TextEncoder();
@@ -196,11 +197,11 @@ export async function GET(
     },
   });
 
-  return new Response(stream, {
+  return addSecurityHeaders(new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     },
-  });
+  }));
 }

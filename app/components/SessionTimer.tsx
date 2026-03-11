@@ -95,9 +95,13 @@ export default function SessionTimer({
   const isOvertime = remainingSeconds < 0;
   const remainingMinutes = Math.ceil(remainingSeconds / 60);
 
-  // Request notification permission on mount
+  // Reflect existing notification permission without prompting on load.
   useEffect(() => {
-    requestNotificationPermission().then(setNotificationsEnabled);
+    if (!("Notification" in window)) {
+      return;
+    }
+
+    setNotificationsEnabled(Notification.permission === "granted");
   }, []);
 
   // Resume audio context on first user interaction
@@ -252,6 +256,8 @@ export default function SessionTimer({
           className={`timer-control-btn ${soundEnabled ? "active" : ""}`}
           onClick={toggleSound}
           title={soundEnabled ? "Mute sounds" : "Enable sounds"}
+          aria-label={soundEnabled ? "Mute timer sounds" : "Enable timer sounds"}
+          aria-pressed={soundEnabled}
         >
           {soundEnabled ? "🔊" : "🔇"}
         </button>
@@ -264,10 +270,20 @@ export default function SessionTimer({
               ? "Disable notifications"
               : "Enable notifications"
           }
+          aria-label={
+            notificationsEnabled
+              ? "Disable timer notifications"
+              : "Enable timer notifications"
+          }
+          aria-pressed={notificationsEnabled}
         >
           {notificationsEnabled ? "🔔" : "🔕"}
         </button>
       </div>
+
+      <p className="timer-helper">
+        Alerts are opt-in. Sound works in the current browser session, and notifications only fire after you enable them.
+      </p>
 
       {isOvertime && (
         <div className="timer-overtime-badge">
