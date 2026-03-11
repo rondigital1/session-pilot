@@ -135,12 +135,15 @@ export const SECURITY_HEADERS = {
   "X-Frame-Options": "DENY",
   "X-XSS-Protection": "1; mode=block",
   "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 };
 
 /**
  * Add security headers to a response
  */
-export function addSecurityHeaders(response: NextResponse): NextResponse {
+export function addSecurityHeaders<T extends Response>(response: T): T {
   for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
     response.headers.set(key, value);
   }

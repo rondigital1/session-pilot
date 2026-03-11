@@ -8,7 +8,7 @@ SessionPilot is a local-first web application that helps developers run focused,
 
 ### How It Works
 
-1. **Scan** — Analyzes your local repo (TODOs, git status, test failures) and GitHub (issues, PRs, recent commits) using Octokit
+1. **Scan** — Analyzes your local repo (TODOs, git status, recent local commits) and adds remote-only GitHub signals when needed
 2. **Plan** — Claude AI generates a prioritized, time-boxed task list based on your goal and focus weights (bugs vs. features vs. refactoring)
 3. **Execute** — Track task completion with a countdown timer, warnings, and audio notifications
 4. **Review** — Get an AI-generated session summary to pick up where you left off tomorrow
@@ -16,7 +16,7 @@ SessionPilot is a local-first web application that helps developers run focused,
 ### Key Features
 
 - **AI-Powered Planning** — Claude SDK analyzes code signals and generates context-aware task plans
-- **Multi-Source Scanning** — Combines local filesystem analysis with GitHub data via Octokit
+- **Multi-Source Scanning** — Starts with local filesystem and git analysis, then uses GitHub for remote-only context such as issues
 - **Focus Weights** — Prioritize bugs, features, or refactoring with adjustable sliders
 - **Real-Time Updates** — Server-Sent Events (SSE) stream planning progress to the UI
 - **Session Timer** — Countdown with configurable warnings and PS1-style sound effects
@@ -42,9 +42,10 @@ npm install
 cp .env.example .env
 
 # Edit .env with your configuration
-# - ANTHROPIC_API_KEY (required for AI planning)
+# - ANTHROPIC_API_KEY (recommended for AI planning)
 # - GITHUB_TOKEN (optional, for GitHub scanning)
 # - DB_PATH (optional, defaults to ./session-pilot.db)
+# - NEXT_PUBLIC_APP_URL (recommended, defaults to localhost protections)
 # - SESSIONPILOT_WORKSPACE_ROOTS (comma-separated allowed paths)
 ```
 
@@ -52,10 +53,11 @@ cp .env.example .env
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | Claude API key for planning and summaries |
+| `ANTHROPIC_API_KEY` | No, but recommended | Claude API key for planning and summaries |
 | `GITHUB_TOKEN` | No | GitHub PAT for repo scanning |
 | `DB_PATH` | No | SQLite database path (default: `./session-pilot.db`) |
-| `SESSIONPILOT_WORKSPACE_ROOTS` | No | Comma-separated list of allowed workspace paths |
+| `NEXT_PUBLIC_APP_URL` | Recommended | App origin used by same-origin API protections |
+| `SESSIONPILOT_WORKSPACE_ROOTS` | Recommended in development, required in production-like usage | Comma-separated list of allowed workspace paths |
 
 ### Running
 
@@ -69,6 +71,21 @@ npm start
 ```
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### Preflight Check
+
+Before a live demo or a production-like run, verify the runtime with:
+
+```bash
+curl http://localhost:3000/api/health
+```
+
+This reports whether:
+- the database is reachable
+- `ANTHROPIC_API_KEY` is configured
+- `GITHUB_TOKEN` is configured
+- `SESSIONPILOT_WORKSPACE_ROOTS` is valid
+- `NEXT_PUBLIC_APP_URL` is valid
 
 ### Database Migrations
 
@@ -208,6 +225,8 @@ POST /api/workspaces/scan     # Scan workspace for signals
 POST /api/session/start       # Start new session
      Body: { workspaceId, userGoal, timeBudgetMinutes, focusWeights }
 
+GET  /api/health              # Runtime preflight checks
+GET  /api/session/[id]        # Load a session with tasks/summary for resume/review
 GET  /api/session/[id]/events # SSE event stream
 
 GET  /api/session/[id]/task   # List session tasks
@@ -221,6 +240,16 @@ POST /api/session/[id]/end    # End session
 
 POST /api/session/[id]/cancel # Cancel session
 ```
+
+## Demo / Release Candidate Checklist
+
+- Confirm `curl http://localhost:3000/api/health` returns `status: "ok"` or only non-blocking warnings.
+- Verify `SESSIONPILOT_WORKSPACE_ROOTS` points at real, accessible repo directories.
+- Verify at least one workspace loads from the UI before the demo starts.
+- If you expect AI planning, confirm `ANTHROPIC_API_KEY` is set.
+- If you expect GitHub signals, confirm `GITHUB_TOKEN` is set.
+- Run `npm test`.
+- Run `npm run build`.
 
 ## License
 

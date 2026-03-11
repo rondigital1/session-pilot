@@ -97,6 +97,38 @@ export interface CancelSessionResponse {
   cancelled: boolean;
 }
 
+export interface UISessionHistoryItem {
+  id: string;
+  workspaceId: string;
+  userGoal: string;
+  timeBudgetMinutes: number;
+  focusWeights: FocusWeights;
+  status: SessionStatus;
+  summary?: string | null;
+  metrics?: SessionMetrics | null;
+  startedAt: string;
+  endedAt?: string | null;
+}
+
+export interface SystemHealthCheck {
+  status: "ok" | "warning" | "error";
+  message: string;
+  workspaceCount?: number;
+}
+
+export interface SystemHealthReport {
+  status: "ok" | "degraded";
+  timestamp: string;
+  warnings: string[];
+  checks: {
+    appUrl: SystemHealthCheck;
+    anthropic: SystemHealthCheck;
+    github: SystemHealthCheck;
+    workspaceRoots: SystemHealthCheck;
+    database: SystemHealthCheck;
+  };
+}
+
 // =============================================================================
 // SSE Event Types
 // =============================================================================
@@ -268,4 +300,6 @@ export interface UISession {
   tasks: UITask[];
   summary?: string;
   metrics?: SessionMetrics;
+  startedAt: string;
+  endedAt?: string | null;
 }

@@ -1,7 +1,18 @@
-import { NextRequest, NextResponse } from "next/server";
-import { scanForRepositories, parseGitHubRepoFromRemote } from "@/lib/workspace";
+import { NextRequest } from "next/server";
+import {
+  getAllowedWorkspaceRoots,
+  parseGitHubRepoFromRemote,
+  scanForRepositories,
+  validatePathWithinRoots,
+} from "@/lib/workspace";
 import type { DiscoveredRepo } from "@/lib/workspace";
-import { validateCsrfProtection, addSecurityHeaders } from "@/lib/security";
+import {
+  readJsonBody,
+  secureError,
+  secureJson,
+  validateApiAccess,
+} from "@/server/api/http";
+import { scanWorkspaceRequestSchema } from "@/server/validation/api";
 
 // Force Node.js runtime for file system access
 export const runtime = "nodejs";
@@ -26,20 +37,6 @@ export interface ScanResponseBody {
 }
 
 /**
- * Get workspace roots from environment variable
- */
-function getWorkspaceRoots(): string[] {
-  const rootsEnv = process.env.SESSIONPILOT_WORKSPACE_ROOTS;
-  if (!rootsEnv) {
-    return [];
-  }
-  return rootsEnv
-    .split(",")
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0);
-}
-
-/**
  * POST /api/workspaces/scan
  *
  * Scan directories for git repositories that can be added as workspaces.
@@ -61,48 +58,41 @@ function getWorkspaceRoots(): string[] {
  * }
  */
 export async function POST(request: NextRequest) {
-  const csrfError = validateCsrfProtection(request);
-  if (csrfError) return addSecurityHeaders(csrfError);
+  const securityError = validateApiAccess(request);
+  if (securityError) {
+    return securityError;
+  }
 
   try {
-    const body: ScanRequestBody = await request.json();
-
-    // Validate maxDepth if provided
-    if (body.maxDepth !== undefined) {
-      if (
-        !Number.isInteger(body.maxDepth) ||
-        body.maxDepth < 1 ||
-        body.maxDepth > 10
-      ) {
-        return addSecurityHeaders(
-          NextResponse.json(
-            { error: "maxDepth must be a positive integer no greater than 10" },
-            { status: 400 }
-          )
-        );
-      }
+    const parsedBody = await readJsonBody<ScanRequestBody>(
+      request,
+      scanWorkspaceRequestSchema
+    );
+    if (!parsedBody.success) {
+      return parsedBody.response;
     }
+    const body = parsedBody.data;
+    const requestedPath = body.path?.trim();
 
     // Determine paths to scan
     let pathsToScan: string[];
     let isWorkspaceRootsScan = false;
 
-    if (body.path) {
-      pathsToScan = [body.path];
+    if (requestedPath) {
+      const pathValidation = await validatePathWithinRoots(requestedPath);
+      if (!pathValidation.valid) {
+        return secureError(pathValidation.error || "Invalid scan path", 400);
+      }
+      pathsToScan = [requestedPath];
     } else {
       // Scan workspace roots from environment
-      pathsToScan = getWorkspaceRoots();
+      pathsToScan = getAllowedWorkspaceRoots();
       isWorkspaceRootsScan = true;
 
       if (pathsToScan.length === 0) {
-        return addSecurityHeaders(
-          NextResponse.json(
-            {
-              error:
-                "No workspace roots configured. Set SESSIONPILOT_WORKSPACE_ROOTS in your .env file.",
-            },
-            { status: 400 }
-          )
+        return secureError(
+          "No workspace roots configured. Set SESSIONPILOT_WORKSPACE_ROOTS in your .env file.",
+          400
         );
       }
     }
@@ -149,6 +139,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    allRepos.sort((left, right) => left.path.localeCompare(right.path));
+
     const response: ScanResponseBody = {
       repos: allRepos,
       scannedDirs: totalScannedDirs,
@@ -156,11 +148,9 @@ export async function POST(request: NextRequest) {
       ...(isWorkspaceRootsScan && { workspaceRoots: pathsToScan }),
     };
 
-    return addSecurityHeaders(NextResponse.json(response));
+    return secureJson(response);
   } catch (error) {
     console.error("Failed to scan for repositories:", error);
-    return addSecurityHeaders(
-      NextResponse.json({ error: "Failed to scan directory" }, { status: 500 })
-    );
+    return secureError("Failed to scan directory", 500);
   }
 }

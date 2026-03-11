@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { randomUUID } from "crypto";
 import {
   getSession,
@@ -7,13 +7,18 @@ import {
   listSessionTasks,
   updateSessionTask,
 } from "@/server/db/queries";
-import type {
-  CreateTaskRequest,
-  UpdateTaskRequest,
-  UITaskChecklistItem,
-  UITaskContext,
-} from "@/server/types/domain";
-import { validateCsrfProtection, addSecurityHeaders } from "@/lib/security";
+import type { CreateTaskRequest, UpdateTaskRequest } from "@/server/types/domain";
+import {
+  readJsonBody,
+  secureError,
+  secureJson,
+  validateApiAccess,
+} from "@/server/api/http";
+import {
+  createTaskRequestSchema,
+  updateTaskRequestSchema,
+} from "@/server/validation/api";
+import { serializeSessionTask } from "@/server/serializers/session";
 
 // Force Node.js runtime
 export const runtime = "nodejs";
@@ -26,10 +31,9 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  // SECURITY: Validate CSRF protection
-  const csrfError = validateCsrfProtection(request);
-  if (csrfError) {
-    return addSecurityHeaders(csrfError);
+  const securityError = validateApiAccess(request);
+  if (securityError) {
+    return securityError;
   }
 
   try {
@@ -37,26 +41,14 @@ export async function GET(
 
     const session = await getSession(sessionId);
     if (!session) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "Session not found" }, { status: 404 })
-      );
+      return secureError("Session not found", 404);
     }
 
     const tasks = await listSessionTasks(sessionId);
-    return addSecurityHeaders(
-      NextResponse.json({
-        tasks: tasks.map((task) => ({
-          ...task,
-          checklist: parseChecklist(task.checklist),
-          context: parseContext(task.context),
-        })),
-      })
-    );
+    return secureJson({ tasks: tasks.map(serializeSessionTask) });
   } catch (error) {
     console.error("Failed to list tasks:", error);
-    return addSecurityHeaders(
-      NextResponse.json({ error: "Failed to list tasks" }, { status: 500 })
-    );
+    return secureError("Failed to list tasks", 500);
   }
 }
 
@@ -77,32 +69,27 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  // SECURITY: Validate CSRF protection
-  const csrfError = validateCsrfProtection(request);
-  if (csrfError) {
-    return addSecurityHeaders(csrfError);
+  const securityError = validateApiAccess(request);
+  if (securityError) {
+    return securityError;
   }
 
   try {
     const { id: sessionId } = await params;
-    const body: CreateTaskRequest = await request.json();
+    const parsedBody = await readJsonBody<CreateTaskRequest>(
+      request,
+      createTaskRequestSchema
+    );
+    if (!parsedBody.success) {
+      return parsedBody.response;
+    }
+    const body = parsedBody.data;
 
-    // Validate session exists
     const session = await getSession(sessionId);
     if (!session) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "Session not found" }, { status: 404 })
-      );
+      return secureError("Session not found", 404);
     }
 
-    // Validate required fields
-    if (!body.title) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "title is required" }, { status: 400 })
-      );
-    }
-
-    // Get current task count for ordering
     const existingTasks = await listSessionTasks(sessionId);
     const order = existingTasks.length;
 
@@ -112,9 +99,9 @@ export async function POST(
     const task = await createSessionTask({
       id: taskId,
       sessionId,
-      title: body.title,
-      description: body.description || null,
-      estimatedMinutes: body.estimatedMinutes || null,
+      title: body.title.trim(),
+      description: body.description?.trim() ? body.description.trim() : null,
+      estimatedMinutes: body.estimatedMinutes ?? null,
       status: "pending",
       checklist: body.checklist ? JSON.stringify(body.checklist) : null,
       context: body.context ? JSON.stringify(body.context) : null,
@@ -122,23 +109,10 @@ export async function POST(
       createdAt: now,
     });
 
-    return addSecurityHeaders(
-      NextResponse.json(
-        {
-          task: {
-            ...task,
-            checklist: parseChecklist(task.checklist),
-            context: parseContext(task.context),
-          },
-        },
-        { status: 201 }
-      )
-    );
+    return secureJson({ task: serializeSessionTask(task) }, 201);
   } catch (error) {
     console.error("Failed to create task:", error);
-    return addSecurityHeaders(
-      NextResponse.json({ error: "Failed to create task" }, { status: 500 })
-    );
+    return secureError("Failed to create task", 500);
   }
 }
 
@@ -164,161 +138,73 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  // SECURITY: Validate CSRF protection
-  const csrfError = validateCsrfProtection(request);
-  if (csrfError) {
-    return addSecurityHeaders(csrfError);
+  const securityError = validateApiAccess(request);
+  if (securityError) {
+    return securityError;
   }
 
   try {
     const { id: sessionId } = await params;
-    const body = (await request.json()) as UpdateTaskRequest & {
-      taskId?: string;
-      notes?: string | null;
-      checklist?: UITaskChecklistItem[] | null;
-      context?: UITaskContext | null;
-    };
+    const parsedBody = await readJsonBody(request, updateTaskRequestSchema);
+    if (!parsedBody.success) {
+      return parsedBody.response;
+    }
+    const body = parsedBody.data;
 
-    // Validate session exists
     const session = await getSession(sessionId);
     if (!session) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "Session not found" }, { status: 404 })
-      );
+      return secureError("Session not found", 404);
     }
 
-    // Validate required fields
-    if (!body.taskId) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "taskId is required" }, { status: 400 })
-      );
-    }
-
-    const hasUpdates =
-      body.status !== undefined ||
-      body.title !== undefined ||
-      body.description !== undefined ||
-      body.estimatedMinutes !== undefined ||
-      body.notes !== undefined ||
-      body.checklist !== undefined ||
-      body.context !== undefined;
-
-    if (!hasUpdates) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "No task updates provided" }, { status: 400 })
-      );
-    }
-
-    // Validate status value
-    const validStatuses = ["pending", "in_progress", "completed", "skipped"];
-    if (body.status !== undefined && !validStatuses.includes(body.status)) {
-      return addSecurityHeaders(
-        NextResponse.json(
-          { error: `status must be one of: ${validStatuses.join(", ")}` },
-          { status: 400 }
-        )
-      );
-    }
-
-    if (body.title !== undefined && typeof body.title !== "string") {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "title must be a string" }, { status: 400 })
-      );
-    }
-
-    if (body.description !== undefined && body.description !== null && typeof body.description !== "string") {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "description must be a string" }, { status: 400 })
-      );
-    }
-
-    if (body.title !== undefined && !body.title.trim()) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "title cannot be empty" }, { status: 400 })
-      );
-    }
-
-    if (body.estimatedMinutes !== undefined && body.estimatedMinutes !== null) {
-      const isValidEstimate =
-        Number.isFinite(body.estimatedMinutes) &&
-        body.estimatedMinutes >= 1 &&
-        body.estimatedMinutes <= 480;
-
-      if (!isValidEstimate) {
-        return addSecurityHeaders(
-          NextResponse.json(
-            { error: "estimatedMinutes must be between 1 and 480" },
-            { status: 400 }
-          )
-        );
-      }
-    }
-
-    // SECURITY: Verify task belongs to this session (IDOR protection)
     const existingTask = await getTask(body.taskId);
     if (!existingTask) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "Task not found" }, { status: 404 })
-      );
+      return secureError("Task not found", 404);
     }
     if (existingTask.sessionId !== sessionId) {
-      // Log potential attack attempt
       console.warn(
         `[Security] IDOR attempt: task ${body.taskId} belongs to session ${existingTask.sessionId}, not ${sessionId}`
       );
-      return addSecurityHeaders(
-        NextResponse.json({ error: "Task does not belong to this session" }, { status: 403 })
-      );
+      return secureError("Task does not belong to this session", 403);
     }
 
-    const task = await updateSessionTask(
-      body.taskId,
-      {
-        status: body.status,
-        title: body.title !== undefined ? body.title.trim() : undefined,
-        description:
-          body.description === undefined
-            ? undefined
-            : body.description === null || !body.description.trim()
-              ? null
-              : body.description.trim(),
-        estimatedMinutes: body.estimatedMinutes,
-        notes: body.notes,
-        checklist:
-          body.checklist === undefined
-            ? undefined
-            : body.checklist === null
-              ? null
-              : JSON.stringify(body.checklist),
-        context:
-          body.context === undefined
-            ? undefined
-            : body.context === null
-              ? null
-              : JSON.stringify(body.context),
-      }
-    );
+    const task = await updateSessionTask(body.taskId, {
+      status: body.status,
+      title: body.title !== undefined ? body.title.trim() : undefined,
+      description:
+        body.description === undefined
+          ? undefined
+          : body.description === null || !body.description.trim()
+            ? null
+            : body.description.trim(),
+      estimatedMinutes: body.estimatedMinutes,
+      notes:
+        body.notes === undefined
+          ? undefined
+          : body.notes === null || !body.notes.trim()
+            ? null
+            : body.notes.trim(),
+      checklist:
+        body.checklist === undefined
+          ? undefined
+          : body.checklist === null
+            ? null
+            : JSON.stringify(body.checklist),
+      context:
+        body.context === undefined
+          ? undefined
+          : body.context === null
+            ? null
+            : JSON.stringify(body.context),
+    });
 
     if (!task) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "Task not found" }, { status: 404 })
-      );
+      return secureError("Task not found", 404);
     }
 
-    return addSecurityHeaders(
-      NextResponse.json({
-        task: {
-          ...task,
-          checklist: parseChecklist(task.checklist),
-          context: parseContext(task.context),
-        },
-      })
-    );
+    return secureJson({ task: serializeSessionTask(task) });
   } catch (error) {
     console.error("Failed to update task:", error);
-    return addSecurityHeaders(
-      NextResponse.json({ error: "Failed to update task" }, { status: 500 })
-    );
+    return secureError("Failed to update task", 500);
   }
 }
 
@@ -329,28 +215,4 @@ export async function PATCH(
  */
 function generateTaskId(): string {
   return `task_${randomUUID()}`;
-}
-
-function parseChecklist(value: string | null): UITaskChecklistItem[] | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseContext(value: string | null): UITaskContext | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(value) as UITaskContext;
-    return parsed;
-  } catch {
-    return undefined;
-  }
 }

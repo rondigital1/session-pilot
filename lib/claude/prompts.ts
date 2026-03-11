@@ -20,4 +20,6 @@ Guidelines:
 - Focus on what was accomplished
 - Note any blockers or incomplete work
 - Suggest what to start with tomorrow
-- Be specific, not generic`;
+- Be specific, not generic
+- Return only the short overview paragraph
+- Do not include headings, bullets, or JSON`;

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import {
   getWorkspace,
   updateWorkspace,
@@ -6,7 +6,13 @@ import {
 } from "@/server/db/queries";
 import type { CreateWorkspaceRequest } from "@/server/types/domain";
 import { validateWorkspace } from "@/lib/workspace";
-import { validateCsrfProtection, addSecurityHeaders } from "@/lib/security";
+import {
+  readJsonBody,
+  secureError,
+  secureJson,
+  validateApiAccess,
+} from "@/server/api/http";
+import { updateWorkspaceRequestSchema } from "@/server/validation/api";
 
 // Force Node.js runtime
 export const runtime = "nodejs";
@@ -20,10 +26,9 @@ interface RouteParams {
  * Get a single workspace by ID
  */
 export async function GET(request: NextRequest, { params }: RouteParams) {
-  // SECURITY: Validate CSRF protection
-  const csrfError = validateCsrfProtection(request);
-  if (csrfError) {
-    return addSecurityHeaders(csrfError);
+  const securityError = validateApiAccess(request);
+  if (securityError) {
+    return securityError;
   }
 
   try {
@@ -31,17 +36,13 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     const workspace = await getWorkspace(id);
 
     if (!workspace) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "Workspace not found" }, { status: 404 })
-      );
+      return secureError("Workspace not found", 404);
     }
 
-    return addSecurityHeaders(NextResponse.json({ workspace }));
+    return secureJson({ workspace });
   } catch (error) {
     console.error("Failed to get workspace:", error);
-    return addSecurityHeaders(
-      NextResponse.json({ error: "Failed to get workspace" }, { status: 500 })
-    );
+    return secureError("Failed to get workspace", 500);
   }
 }
 
@@ -59,29 +60,42 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
  * }
  */
 export async function PUT(request: NextRequest, { params }: RouteParams) {
-  // SECURITY: Validate CSRF protection
-  const csrfError = validateCsrfProtection(request);
-  if (csrfError) {
-    return addSecurityHeaders(csrfError);
+  const securityError = validateApiAccess(request);
+  if (securityError) {
+    return securityError;
   }
 
   try {
     const { id } = await params;
-    const body: Partial<CreateWorkspaceRequest> = await request.json();
+    const parsedBody = await readJsonBody<Partial<CreateWorkspaceRequest>>(
+      request,
+      updateWorkspaceRequestSchema
+    );
+    if (!parsedBody.success) {
+      return parsedBody.response;
+    }
+    const body = parsedBody.data;
+    const normalizedName = body.name?.trim();
+    const normalizedLocalPath = body.localPath?.trim();
+    const normalizedGitHubRepo = body.githubRepo?.trim();
 
     // Check workspace exists
     const existing = await getWorkspace(id);
     if (!existing) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "Workspace not found" }, { status: 404 })
-      );
+      return secureError("Workspace not found", 404);
     }
 
     // Merge with existing values for validation
     const merged = {
-      name: body.name ?? existing.name,
-      localPath: body.localPath ?? existing.localPath,
-      githubRepo: body.githubRepo ?? existing.githubRepo ?? undefined,
+      name: normalizedName || existing.name,
+      localPath:
+        body.localPath === undefined
+          ? existing.localPath
+          : normalizedLocalPath || undefined,
+      githubRepo:
+        body.githubRepo === undefined
+          ? existing.githubRepo ?? undefined
+          : normalizedGitHubRepo || undefined,
     };
 
     // Validate the merged configuration
@@ -93,36 +107,32 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     });
 
     if (!validation.valid) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: validation.error }, { status: 400 })
-      );
+      return secureError(validation.error || "Invalid workspace", 400);
     }
 
     // Build update object with only provided fields
     const updateData: {
       name?: string;
-      localPath?: string;
+      localPath?: string | null;
       githubRepo?: string | null;
     } = {};
 
     if (body.name !== undefined) {
-      updateData.name = body.name;
+      updateData.name = normalizedName;
     }
     if (body.localPath !== undefined) {
-      updateData.localPath = body.localPath;
+      updateData.localPath = normalizedLocalPath || null;
     }
     if (body.githubRepo !== undefined) {
-      updateData.githubRepo = body.githubRepo || null;
+      updateData.githubRepo = normalizedGitHubRepo || null;
     }
 
     const workspace = await updateWorkspace(id, updateData);
 
-    return addSecurityHeaders(NextResponse.json({ workspace }));
+    return secureJson({ workspace });
   } catch (error) {
     console.error("Failed to update workspace:", error);
-    return addSecurityHeaders(
-      NextResponse.json({ error: "Failed to update workspace" }, { status: 500 })
-    );
+    return secureError("Failed to update workspace", 500);
   }
 }
 
@@ -133,10 +143,9 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
  * SECURITY: Protected by CSRF validation
  */
 export async function DELETE(request: NextRequest, { params }: RouteParams) {
-  // SECURITY: Validate CSRF protection
-  const csrfError = validateCsrfProtection(request);
-  if (csrfError) {
-    return addSecurityHeaders(csrfError);
+  const securityError = validateApiAccess(request);
+  if (securityError) {
+    return securityError;
   }
 
   try {
@@ -145,24 +154,18 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     // Check workspace exists
     const existing = await getWorkspace(id);
     if (!existing) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "Workspace not found" }, { status: 404 })
-      );
+      return secureError("Workspace not found", 404);
     }
 
     const deleted = await deleteWorkspace(id);
 
     if (!deleted) {
-      return addSecurityHeaders(
-        NextResponse.json({ error: "Failed to delete workspace" }, { status: 500 })
-      );
+      return secureError("Failed to delete workspace", 500);
     }
 
-    return addSecurityHeaders(NextResponse.json({ success: true }));
+    return secureJson({ success: true });
   } catch (error) {
     console.error("Failed to delete workspace:", error);
-    return addSecurityHeaders(
-      NextResponse.json({ error: "Failed to delete workspace" }, { status: 500 })
-    );
+    return secureError("Failed to delete workspace", 500);
   }
 }

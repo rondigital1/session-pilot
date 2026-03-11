@@ -113,7 +113,8 @@ ${notesSection}
 2. If there are remaining tasks, briefly note what to pick up next
 3. Mention any patterns or blockers indicated in the notes
 4. Keep the total summary to 2-3 sentences maximum
-5. Write in a helpful, forward-looking tone for tomorrow's session`;
+5. Write in a helpful, forward-looking tone for tomorrow's session
+6. Return only the overview paragraph, without headings or bullet lists`;
 }
 
 // Internal helpers
