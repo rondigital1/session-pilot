@@ -4,36 +4,25 @@
  * Run with: npx tsx scripts/migrate.ts
  * Or via npm: npm run db:migrate:run
  *
- * This script applies pending Drizzle migrations to the database.
+ * This script uses the same initialization path as the app runtime so
+ * legacy local databases can backfill migration records before applying
+ * newer Drizzle migrations.
  */
 
-import { createClient } from "@libsql/client";
-import { drizzle } from "drizzle-orm/libsql";
-import { migrate } from "drizzle-orm/libsql/migrator";
-import * as path from "path";
+import { closeDb, initializeDb } from "../server/db/client";
 
 async function runMigrations() {
   const dbPath = process.env.DB_PATH || "./session-pilot.db";
   console.log(`Migrating database at: ${dbPath}`);
 
-  const client = createClient({
-    url: `file:${dbPath}`,
-  });
-
-  const db = drizzle(client);
-
-  // Run migrations from the drizzle folder
-  const migrationsFolder = path.join(process.cwd(), "drizzle");
-  console.log(`Reading migrations from: ${migrationsFolder}`);
-
   try {
-    await migrate(db, { migrationsFolder });
+    await initializeDb();
     console.log("✅ Migrations completed successfully!");
   } catch (error) {
     console.error("❌ Migration failed:", error);
     process.exit(1);
   } finally {
-    client.close();
+    closeDb();
   }
 }
 

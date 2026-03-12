@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  createExecutionRequestSchema,
   createTaskRequestSchema,
   createWorkspaceRequestSchema,
   endSessionRequestSchema,
+  executionProviderIdSchema,
   generateChecklistRequestSchema,
   ideaFeedbackRequestSchema,
   improveScanRequestSchema,
@@ -144,5 +146,29 @@ describe("task schemas", () => {
   it("accepts an empty end-session request body", () => {
     const result = endSessionRequestSchema.safeParse({});
     expect(result.success).toBe(true);
+  });
+});
+
+describe("execution schemas", () => {
+  it("accepts the Codex-only execution provider contract", () => {
+    expect(executionProviderIdSchema.safeParse("codex-cli").success).toBe(true);
+
+    const result = createExecutionRequestSchema.safeParse({
+      suggestionId: "suggestion_123",
+      providerId: "codex-cli",
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unsupported execution providers", () => {
+    expect(executionProviderIdSchema.safeParse("openhands").success).toBe(false);
+
+    const result = createExecutionRequestSchema.safeParse({
+      suggestionId: "suggestion_123",
+      providerId: "openhands",
+    });
+
+    expect(result.success).toBe(false);
   });
 });

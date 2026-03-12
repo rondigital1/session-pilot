@@ -18,7 +18,12 @@ build
 # Database
 *.db
 *.db-journal
-drizzle/
+drizzle/*
+!drizzle/0003_puzzling_smiling_tiger.sql
+!drizzle/meta/
+drizzle/meta/*
+!drizzle/meta/0003_snapshot.json
+!drizzle/meta/_journal.json
 
 # IDE
 .idea

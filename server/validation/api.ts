@@ -9,6 +9,7 @@ const optionalInputString = z.string().trim();
 const nullableOptionalString = z.string().trim().nullable();
 
 const taskStatusValues = ["pending", "in_progress", "completed", "skipped"] as const;
+const executionProviderValues = ["codex-cli"] as const;
 
 export const focusWeightsSchema = z
   .object({
@@ -236,3 +237,40 @@ export const endSessionRequestSchema = z
       .optional(),
   })
   .strict();
+
+export const createRepoRootRequestSchema = z
+  .object({
+    label: trimmedNonEmptyString.max(120, "Root label must be 120 characters or less"),
+    path: trimmedNonEmptyString.max(1000, "Root path must be 1000 characters or less"),
+  })
+  .strict();
+
+export const updateRepoRootRequestSchema = z
+  .object({
+    label: trimmedNonEmptyString.max(120, "Root label must be 120 characters or less").optional(),
+    path: trimmedNonEmptyString.max(1000, "Root path must be 1000 characters or less").optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.label === undefined && value.path === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Provide at least one field to update",
+      });
+    }
+  });
+
+export const analyzeRepositoryRequestSchema = z
+  .object({
+    force: z.boolean().optional(),
+  })
+  .strict();
+
+export const createExecutionRequestSchema = z
+  .object({
+    suggestionId: trimmedNonEmptyString,
+    providerId: z.enum(executionProviderValues),
+  })
+  .strict();
+
+export const executionProviderIdSchema = z.enum(executionProviderValues);

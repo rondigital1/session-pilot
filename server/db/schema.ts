@@ -231,6 +231,158 @@ export const ideaFeedback = sqliteTable(
   ]
 );
 
+// =============================================================================
+// Repo Improvement Orchestrator Tables
+// =============================================================================
+
+export const repoRoots = sqliteTable(
+  "repo_roots",
+  {
+    id: text("id").primaryKey(),
+    label: text("label").notNull(),
+    path: text("path").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [index("idx_repo_roots_path").on(table.path)]
+);
+
+export const repositories = sqliteTable(
+  "repositories",
+  {
+    id: text("id").primaryKey(),
+    rootId: text("root_id")
+      .notNull()
+      .references(() => repoRoots.id),
+    name: text("name").notNull(),
+    path: text("path").notNull(),
+    remoteOrigin: text("remote_origin"),
+    defaultBranch: text("default_branch"),
+    currentBranch: text("current_branch"),
+    isDirty: integer("is_dirty", { mode: "boolean" }).notNull().default(false),
+    fingerprintHash: text("fingerprint_hash"),
+    profileJson: text("profile_json"),
+    lastAnalyzedAt: integer("last_analyzed_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    index("idx_repositories_root").on(table.rootId),
+    index("idx_repositories_path").on(table.path),
+    index("idx_repositories_last_analyzed").on(table.lastAnalyzedAt),
+  ]
+);
+
+export const analysisRuns = sqliteTable(
+  "analysis_runs",
+  {
+    id: text("id").primaryKey(),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => repositories.id),
+    status: text("status", {
+      enum: ["running", "completed", "failed"],
+    })
+      .notNull()
+      .default("running"),
+    fingerprintHash: text("fingerprint_hash"),
+    profileJson: text("profile_json").notNull(),
+    findingsJson: text("findings_json").notNull(),
+    summary: text("summary").notNull(),
+    error: text("error"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    completedAt: integer("completed_at", { mode: "timestamp" }),
+  },
+  (table) => [
+    index("idx_analysis_runs_repo").on(table.repositoryId),
+    index("idx_analysis_runs_created").on(table.createdAt),
+    index("idx_analysis_runs_status").on(table.status),
+  ]
+);
+
+export const suggestions = sqliteTable(
+  "suggestions",
+  {
+    id: text("id").primaryKey(),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => repositories.id),
+    analysisRunId: text("analysis_run_id")
+      .notNull()
+      .references(() => analysisRuns.id),
+    title: text("title").notNull(),
+    category: text("category").notNull(),
+    summary: text("summary").notNull(),
+    evidenceJson: text("evidence_json").notNull(),
+    impactScore: integer("impact_score").notNull(),
+    effortScore: integer("effort_score").notNull(),
+    confidenceScore: integer("confidence_score").notNull(),
+    riskScore: integer("risk_score").notNull(),
+    priorityScore: real("priority_score").notNull(),
+    autonomyMode: text("autonomy_mode").notNull(),
+    likelyFilesJson: text("likely_files_json").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    index("idx_suggestions_repo").on(table.repositoryId),
+    index("idx_suggestions_analysis").on(table.analysisRunId),
+    index("idx_suggestions_priority").on(table.priorityScore),
+  ]
+);
+
+export const executionTasks = sqliteTable(
+  "execution_tasks",
+  {
+    id: text("id").primaryKey(),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => repositories.id),
+    suggestionId: text("suggestion_id")
+      .notNull()
+      .references(() => suggestions.id),
+    providerId: text("provider_id").notNull(),
+    status: text("status", {
+      enum: ["queued", "preparing", "running", "validating", "completed", "failed", "cancelled"],
+    })
+      .notNull()
+      .default("queued"),
+    branchName: text("branch_name"),
+    worktreePath: text("worktree_path"),
+    taskSpecJson: text("task_spec_json").notNull(),
+    agentPrompt: text("agent_prompt").notNull(),
+    validationCommandsJson: text("validation_commands_json").notNull(),
+    validationResultsJson: text("validation_results_json"),
+    finalMessage: text("final_message"),
+    error: text("error"),
+    startedAt: integer("started_at", { mode: "timestamp" }).notNull(),
+    completedAt: integer("completed_at", { mode: "timestamp" }),
+    cancelledAt: integer("cancelled_at", { mode: "timestamp" }),
+  },
+  (table) => [
+    index("idx_execution_tasks_repo").on(table.repositoryId),
+    index("idx_execution_tasks_suggestion").on(table.suggestionId),
+    index("idx_execution_tasks_status").on(table.status),
+    index("idx_execution_tasks_started").on(table.startedAt),
+  ]
+);
+
+export const executionEvents = sqliteTable(
+  "execution_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    executionTaskId: text("execution_task_id")
+      .notNull()
+      .references(() => executionTasks.id),
+    eventType: text("event_type").notNull(),
+    eventData: text("event_data").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    index("idx_execution_events_task").on(table.executionTaskId),
+    index("idx_execution_events_created").on(table.createdAt),
+  ]
+);
+
 // Type exports for use in application code
 export type Workspace = typeof workspaces.$inferSelect;
 export type NewWorkspace = typeof workspaces.$inferInsert;
@@ -258,3 +410,21 @@ export type NewImprovementIdea = typeof improvementIdeas.$inferInsert;
 
 export type IdeaFeedbackRow = typeof ideaFeedback.$inferSelect;
 export type NewIdeaFeedback = typeof ideaFeedback.$inferInsert;
+
+export type RepoRoot = typeof repoRoots.$inferSelect;
+export type NewRepoRoot = typeof repoRoots.$inferInsert;
+
+export type Repository = typeof repositories.$inferSelect;
+export type NewRepository = typeof repositories.$inferInsert;
+
+export type AnalysisRun = typeof analysisRuns.$inferSelect;
+export type NewAnalysisRun = typeof analysisRuns.$inferInsert;
+
+export type Suggestion = typeof suggestions.$inferSelect;
+export type NewSuggestion = typeof suggestions.$inferInsert;
+
+export type ExecutionTask = typeof executionTasks.$inferSelect;
+export type NewExecutionTask = typeof executionTasks.$inferInsert;
+
+export type ExecutionEvent = typeof executionEvents.$inferSelect;
+export type NewExecutionEvent = typeof executionEvents.$inferInsert;

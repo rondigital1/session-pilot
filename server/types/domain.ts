@@ -303,3 +303,263 @@ export interface UISession {
   startedAt: string;
   endedAt?: string | null;
 }
+
+// =============================================================================
+// Repo Improvement Orchestrator Types
+// =============================================================================
+
+export type SuggestionCategory =
+  | "frontend"
+  | "backend"
+  | "architecture"
+  | "testing"
+  | "dx"
+  | "performance"
+  | "security"
+  | "observability"
+  | "docs"
+  | "workflow";
+
+export type FindingSeverity = "info" | "warning" | "critical";
+
+export type AutonomyMode = "safe_auto" | "guided" | "manual_review";
+
+export type AnalysisRunStatus = "running" | "completed" | "failed";
+
+export type ExecutionProviderId = "codex-cli";
+
+export type ExecutionStatus =
+  | "queued"
+  | "preparing"
+  | "running"
+  | "validating"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type ExecutionEventType =
+  | "status"
+  | "log"
+  | "stdout"
+  | "stderr"
+  | "agent_event"
+  | "validation_started"
+  | "validation_result"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface CreateRepoRootRequest {
+  label: string;
+  path: string;
+}
+
+export interface UpdateRepoRootRequest {
+  label?: string;
+  path?: string;
+}
+
+export interface RepoRootRecord {
+  id: string;
+  label: string;
+  path: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RepositoryInventoryItem {
+  id: string;
+  rootId: string;
+  name: string;
+  path: string;
+  remoteOrigin?: string | null;
+  defaultBranch?: string | null;
+  currentBranch?: string | null;
+  isDirty: boolean;
+  lastAnalyzedAt?: string | null;
+  lastAnalysisRunId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RepoProfile {
+  repositoryId: string;
+  repoName: string;
+  repoPath: string;
+  packageManager: "npm" | "pnpm" | "yarn" | "bun" | "unknown";
+  languages: string[];
+  frameworks: string[];
+  scripts: string[];
+  stackTags: string[];
+  validationCommands: string[][];
+  defaultBranch?: string | null;
+  currentBranch?: string | null;
+  remoteOrigin?: string | null;
+  isDirty: boolean;
+  hasReadme: boolean;
+  hasEnvExample: boolean;
+  hasCi: boolean;
+  hasLint: boolean;
+  hasTests: boolean;
+  hasTypecheck: boolean;
+  typecheckStrict: boolean;
+  ciProvider?: string | null;
+  testRunner?: string | null;
+  lintTool?: string | null;
+  lineCount: number;
+  fileCount: number;
+}
+
+export interface RepoFindingEvidence {
+  label: string;
+  detail: string;
+  filePath?: string;
+}
+
+export interface RepoFinding {
+  id: string;
+  category: SuggestionCategory;
+  severity: FindingSeverity;
+  title: string;
+  summary: string;
+  evidence: RepoFindingEvidence[];
+  likelyFiles: string[];
+}
+
+export interface RepoAnalysisResult {
+  id: string;
+  repositoryId: string;
+  status: AnalysisRunStatus;
+  profile: RepoProfile;
+  findings: RepoFinding[];
+  summary: string;
+  createdAt: string;
+  completedAt?: string | null;
+  error?: string | null;
+}
+
+export interface SuggestionEvidenceItem {
+  label: string;
+  detail: string;
+  filePath?: string;
+}
+
+export interface SuggestionRecord {
+  id: string;
+  repositoryId: string;
+  analysisRunId: string;
+  title: string;
+  category: SuggestionCategory;
+  summary: string;
+  evidence: SuggestionEvidenceItem[];
+  impactScore: number;
+  effortScore: number;
+  confidenceScore: number;
+  riskScore: number;
+  priorityScore: number;
+  autonomyMode: AutonomyMode;
+  likelyFiles: string[];
+  createdAt: string;
+}
+
+export interface TaskSpec {
+  suggestionId: string;
+  repositoryId: string;
+  title: string;
+  problem: string;
+  evidence: string[];
+  goal: string;
+  nonGoals: string[];
+  likelyFiles: string[];
+  implementationPlan: string[];
+  acceptanceCriteria: string[];
+  validationCommands: string[][];
+  risks: string[];
+}
+
+export interface PromptGenerationResult {
+  providerId: ExecutionProviderId;
+  prompt: string;
+}
+
+export interface CreateExecutionRequest {
+  suggestionId: string;
+  providerId: ExecutionProviderId;
+}
+
+export interface ValidationCommandResult {
+  command: string[];
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+}
+
+export interface ExecutionTaskRecord {
+  id: string;
+  repositoryId: string;
+  suggestionId: string;
+  providerId: ExecutionProviderId;
+  status: ExecutionStatus;
+  branchName?: string | null;
+  worktreePath?: string | null;
+  taskSpec: TaskSpec;
+  agentPrompt: string;
+  validationCommands: string[][];
+  validationResults: ValidationCommandResult[];
+  finalMessage?: string | null;
+  startedAt: string;
+  completedAt?: string | null;
+  cancelledAt?: string | null;
+  error?: string | null;
+}
+
+export interface ExecutionEventRecord {
+  id: number;
+  executionTaskId: string;
+  type: ExecutionEventType;
+  timestamp: string;
+  data: unknown;
+}
+
+export interface RepositoryListResponse {
+  repositories: RepositoryInventoryItem[];
+}
+
+export interface RepositoryDetailResponse {
+  repository: RepositoryInventoryItem;
+  analysis: RepoAnalysisResult | null;
+  suggestions: SuggestionRecord[];
+  executions: ExecutionTaskRecord[];
+}
+
+export interface AnalyzeRepositoryResponse {
+  repository: RepositoryInventoryItem;
+  analysis: RepoAnalysisResult;
+  suggestions: SuggestionRecord[];
+}
+
+export interface SuggestionDetailResponse {
+  suggestion: SuggestionRecord;
+  repository: RepositoryInventoryItem;
+  analysis: RepoAnalysisResult | null;
+}
+
+export interface SuggestionTaskResponse extends SuggestionDetailResponse {
+  taskSpec: TaskSpec;
+  prompt: PromptGenerationResult;
+}
+
+export interface CreateExecutionResponse {
+  execution: ExecutionTaskRecord;
+}
+
+export interface ExecutionDetailResponse {
+  execution: ExecutionTaskRecord;
+  repository: RepositoryInventoryItem | null;
+  suggestion: SuggestionRecord | null;
+}
+
+export interface CancelExecutionResponse {
+  cancelled: boolean;
+}

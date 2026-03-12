@@ -1,256 +1,132 @@
 # SessionPilot
 
-AI-powered coding session planner that scans your repo and generates time-boxed task plans. Built with Next.js, Claude SDK, and Octokit.
+Local-first repo improvement orchestrator for discovering git repositories, analyzing one deeply, ranking grounded improvements, shaping bounded execution tasks, and dispatching those tasks through a local coding agent with safe git isolation.
 
-## Overview
+## MVP Loop
 
-SessionPilot is a local-first web application that helps developers run focused, productive coding sessions. It uses Claude AI to analyze your codebase and generate intelligent task plans tailored to your goals, time budget, and priorities.
+SessionPilot now supports this end-to-end flow:
 
-### How It Works
+1. Configure local root directories such as `~/code` or `~/projects`
+2. Discover local git repositories under those roots
+3. Select one repo and run deterministic deep analysis
+4. Review ranked improvement suggestions scored by impact, effort, risk, and confidence
+5. Open a suggestion to generate:
+   - a human-readable task spec
+   - an execution-grade Codex CLI prompt
+6. Execute the task in an isolated git worktree
+7. Stream live execution logs and status via SSE
+8. Run bounded validation commands and review the result
 
-1. **Scan** — Analyzes your local repo (TODOs, git status, recent local commits) and adds remote-only GitHub signals when needed
-2. **Plan** — Claude AI generates a prioritized, time-boxed task list based on your goal and focus weights (bugs vs. features vs. refactoring)
-3. **Execute** — Track task completion with a countdown timer, warnings, and audio notifications
-4. **Review** — Get an AI-generated session summary to pick up where you left off tomorrow
+## Current Architecture
 
-### Key Features
+This MVP stays inside the existing Next.js app instead of splitting frontend and backend yet.
 
-- **AI-Powered Planning** — Claude SDK analyzes code signals and generates context-aware task plans
-- **Multi-Source Scanning** — Starts with local filesystem and git analysis, then uses GitHub for remote-only context such as issues
-- **Focus Weights** — Prioritize bugs, features, or refactoring with adjustable sliders
-- **Real-Time Updates** — Server-Sent Events (SSE) stream planning progress to the UI
-- **Session Timer** — Countdown with configurable warnings and PS1-style sound effects
-- **Local-First** — SQLite database with Drizzle ORM; runs entirely on your machine
+- Frontend: Next.js App Router, React 19, TypeScript, Tailwind CSS, TanStack Query
+- Backend: Next.js Node runtime API routes, TypeScript services
+- Persistence: SQLite + Drizzle ORM
+- Streaming: Server-Sent Events
+- Execution provider: Codex CLI
+- Isolation: git worktrees under `~/.sessionpilot/worktrees` by default
+
+Core services added in this pivot:
+
+- `RepoDiscoveryService`
+- `RepoFingerprintService`
+- `RepoAnalysisService`
+- `SuggestionScoringService`
+- `TaskSpecService`
+- `PromptGenerationService`
+- `ExecutionOrchestrator`
+- `GitWorkspaceService`
+- `ValidationRunner`
+- `RunEventStore`
+
+Legacy session-planner code still exists in the repo but is no longer the main UX.
+
+## Prerequisites
+
+- Node.js 18+
+- npm
+- git
+- Codex CLI available on `PATH`
+
+Optional but recommended:
+
+- `SESSIONPILOT_WORKSPACE_ROOTS` configured to constrain which local paths the app may manage
 
 ## Setup
 
-### Prerequisites
-
-- Node.js 18+
-- npm or pnpm
-
-### Installation
-
 ```bash
-# Clone the repository
 cd session-pilot
-
-# Install dependencies
 npm install
-
-# Copy environment file
 cp .env.example .env
-
-# Edit .env with your configuration
-# - ANTHROPIC_API_KEY (recommended for AI planning)
-# - GITHUB_TOKEN (optional, for GitHub scanning)
-# - DB_PATH (optional, defaults to ./session-pilot.db)
-# - NEXT_PUBLIC_APP_URL (recommended, defaults to localhost protections)
-# - SESSIONPILOT_WORKSPACE_ROOTS (comma-separated allowed paths)
+npm run db:migrate:run
 ```
 
-### Environment Variables
+Then edit `.env` as needed.
+
+## Environment Variables
 
 | Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | No, but recommended | Claude API key for planning and summaries |
-| `GITHUB_TOKEN` | No | GitHub PAT for repo scanning |
-| `DB_PATH` | No | SQLite database path (default: `./session-pilot.db`) |
-| `NEXT_PUBLIC_APP_URL` | Recommended | App origin used by same-origin API protections |
-| `SESSIONPILOT_WORKSPACE_ROOTS` | Recommended in development, required in production-like usage | Comma-separated list of allowed workspace paths |
+| --- | --- | --- |
+| `DB_PATH` | No | SQLite database path. Defaults to `./session-pilot.db`. |
+| `NEXT_PUBLIC_APP_URL` | Recommended | App origin used by same-origin API protections. |
+| `SESSIONPILOT_WORKSPACE_ROOTS` | Recommended | Comma-separated security boundary for allowed root paths. |
+| `SESSIONPILOT_WORKTREE_ROOT` | No | Override the default isolated worktree directory. |
+| `ANTHROPIC_API_KEY` | No | Legacy improve/session features only. Not required for the repo-analysis MVP loop. |
+| `GITHUB_TOKEN` | No | Legacy GitHub scanning only. Not required for the repo-analysis MVP loop. |
 
-### Running
+## Run Locally
 
 ```bash
-# Development
 npm run dev
+```
 
-# Production build
+Open `http://localhost:3000`.
+
+Useful commands:
+
+```bash
+npm test
+npm run typecheck
 npm run build
-npm start
-```
-
-Open [http://localhost:3000](http://localhost:3000) in your browser.
-
-### Preflight Check
-
-Before a live demo or a production-like run, verify the runtime with:
-
-```bash
-curl http://localhost:3000/api/health
-```
-
-This reports whether:
-- the database is reachable
-- `ANTHROPIC_API_KEY` is configured
-- `GITHUB_TOKEN` is configured
-- `SESSIONPILOT_WORKSPACE_ROOTS` is valid
-- `NEXT_PUBLIC_APP_URL` is valid
-
-### Database Migrations
-
-SessionPilot uses Drizzle ORM with SQLite for data persistence. The database schema is managed through migrations.
-
-#### Migration Commands
-
-```bash
-# Generate a new migration after schema changes
 npm run db:generate
-
-# Apply pending migrations to the database
 npm run db:migrate:run
-
-# Open Drizzle Studio to browse/edit data
-npm run db:studio
 ```
 
-#### Migration Workflow
+`npm run typecheck` is the reliable local TypeScript-only check for this repo. `npm run build` remains the full Next.js production validation path.
 
-1. **Modify schema**: Edit `server/db/schema.ts` to add/change tables or columns
-2. **Generate migration**: Run `npm run db:generate` to create a new SQL migration file in `drizzle/`
-3. **Review migration**: Check the generated SQL in `drizzle/XXXX_*.sql`
-4. **Apply migration**: Run `npm run db:migrate:run` to apply changes to the database
+## Safety Model
 
-#### Deployment
+- Repo discovery only promotes directories with `.git`
+- Root paths are validated against `SESSIONPILOT_WORKSPACE_ROOTS` when configured
+- Agent execution never runs in the source checkout
+- Each run creates an isolated worktree and branch
+- Commands are executed without shell interpolation
+- Validation commands are bounded to inferred repo scripts and run inside the isolated worktree
 
-For production deployments:
-1. Run migrations before starting the app: `npm run db:migrate:run`
-2. Or let the app auto-migrate on startup (migrations run automatically when the app initializes)
+## Main API Surface
 
-The app automatically runs pending migrations on startup via `initializeDb()` in `server/db/client.ts`.
+- `GET/POST/DELETE /api/repo-roots`
+- `GET /api/repositories`
+- `POST /api/repositories/discover`
+- `GET /api/repositories/:id`
+- `POST /api/repositories/:id/analyze`
+- `GET /api/suggestions/:id`
+- `GET /api/suggestions/:id/task`
+- `POST /api/executions`
+- `GET /api/executions/:id`
+- `GET /api/executions/:id/events`
+- `POST /api/executions/:id/cancel`
 
-## Project Structure
+## Notes
 
-```
-session-pilot/
-├── app/                          # Next.js App Router
-│   ├── page.tsx                  # Main single-page UI
-│   ├── layout.tsx                # Root layout
-│   ├── globals.css               # Styles
-│   ├── session-context.tsx       # Client-side state management
-│   ├── components/               # UI components
-│   │   ├── StartView.tsx         # Initial setup view
-│   │   ├── PlanningView.tsx      # SSE event display during planning
-│   │   ├── TaskSelectionView.tsx # Task selection before session
-│   │   ├── SessionView.tsx       # Active session with timer
-│   │   ├── SummaryView.tsx       # Session completion summary
-│   │   ├── SessionTimer.tsx      # Countdown timer with notifications
-│   │   └── WorkspaceManager.tsx  # Workspace CRUD UI
-│   └── api/                      # API routes
-│       ├── workspaces/           # Workspace CRUD endpoints
-│       └── session/
-│           ├── start/route.ts    # POST start session
-│           └── [id]/
-│               ├── events/route.ts   # GET SSE stream
-│               ├── task/route.ts     # GET/POST/PATCH tasks
-│               ├── end/route.ts      # POST end session
-│               └── cancel/route.ts   # POST cancel session
-├── server/
-│   ├── db/
-│   │   ├── schema.ts             # Drizzle SQLite schema
-│   │   ├── client.ts             # Database connection + migrations
-│   │   └── queries.ts            # Query functions
-│   ├── types/
-│   │   └── domain.ts             # TypeScript types
-│   ├── agent/
-│   │   ├── claudeClient.ts       # Claude SDK wrapper
-│   │   ├── sessionPlanner.ts     # Plan generation logic
-│   │   ├── planningWorkflow.ts   # Orchestrates scanning + planning
-│   │   └── policy.ts             # Tool permission policies
-│   └── scanners/
-│       ├── localScan.ts          # Local repo scanner
-│       ├── githubScan.ts         # GitHub scanner
-│       └── parsers.ts            # Signal extraction utilities
-├── lib/
-│   ├── claude/                   # Claude prompts, parsers, formatters
-│   ├── github/                   # Octokit utilities and converters
-│   ├── session/                  # Session event system
-│   ├── workspace/                # Workspace validation
-│   ├── audio/                    # Sound effects
-│   └── sse/                      # SSE streaming utilities
-├── drizzle/                      # Database migrations
-├── scripts/
-│   └── migrate.ts                # Standalone migration runner
-├── drizzle.config.ts             # Drizzle Kit config
-├── next.config.ts                # Next.js config
-├── package.json
-└── tsconfig.json
-```
+- The suggestion engine is deterministic in this MVP. It does not rely on an LLM to analyze or rank repo improvements.
+- The only supported execution provider in this MVP is `codex-cli`.
+- Completed worktrees are preserved for review rather than cleaned up automatically.
 
-## Tech Stack
+## MVP Gaps
 
-| Layer | Technology |
-|-------|------------|
-| Framework | Next.js 15 (App Router) |
-| AI | Claude SDK (Anthropic) |
-| GitHub Integration | Octokit |
-| Database | SQLite + Drizzle ORM |
-| Real-Time | Server-Sent Events (SSE) |
-| Language | TypeScript |
-
-## Session Flow
-
-```
-┌─────────┐    ┌──────────┐    ┌────────────────┐    ┌─────────┐    ┌─────────┐
-│  Start  │ →  │ Planning │ →  │ Task Selection │ →  │ Session │ →  │ Summary │
-└─────────┘    └──────────┘    └────────────────┘    └─────────┘    └─────────┘
-   Setup         AI scans        Review & select      Work with       AI-generated
-   workspace     & plans         tasks to include     timer           recap
-```
-
-## Configuration Options
-
-- **Focus Weights** — Sliders for bugs/features/refactor prioritization (0.0–1.0)
-- **Time Budget** — Configurable session length (15–480 minutes)
-- **Workspace Roots** — Restrict allowed paths via `SESSIONPILOT_WORKSPACE_ROOTS`
-
----
-
-## API Reference
-
-### Workspaces
-
-```
-GET  /api/workspaces          # List all workspaces
-POST /api/workspaces          # Create workspace
-     Body: { name, localPath, githubRepo? }
-PUT  /api/workspaces/[id]     # Update workspace
-DELETE /api/workspaces/[id]   # Delete workspace
-POST /api/workspaces/scan     # Scan workspace for signals
-```
-
-### Sessions
-
-```
-POST /api/session/start       # Start new session
-     Body: { workspaceId, userGoal, timeBudgetMinutes, focusWeights }
-
-GET  /api/health              # Runtime preflight checks
-GET  /api/session/[id]        # Load a session with tasks/summary for resume/review
-GET  /api/session/[id]/events # SSE event stream
-
-GET  /api/session/[id]/task   # List session tasks
-POST /api/session/[id]/task   # Create task
-     Body: { title, description?, estimatedMinutes? }
-PATCH /api/session/[id]/task  # Update task status
-     Body: { taskId, status, notes? }
-
-POST /api/session/[id]/end    # End session
-     Body: { summary? }
-
-POST /api/session/[id]/cancel # Cancel session
-```
-
-## Demo / Release Candidate Checklist
-
-- Confirm `curl http://localhost:3000/api/health` returns `status: "ok"` or only non-blocking warnings.
-- Verify `SESSIONPILOT_WORKSPACE_ROOTS` points at real, accessible repo directories.
-- Verify at least one workspace loads from the UI before the demo starts.
-- If you expect AI planning, confirm `ANTHROPIC_API_KEY` is set.
-- If you expect GitHub signals, confirm `GITHUB_TOKEN` is set.
-- Run `npm test`.
-- Run `npm run build`.
-
-## License
-
-MIT
+- Execution coverage now validates the create-task bundle and execution creation happy paths, but there is still no test that drives a full live agent run end-to-end against a real git worktree.
+- SSE execution stream behavior is only exercised indirectly; reconnect behavior and long-running stream reliability still need dedicated coverage.
+- Legacy session-planner and improve flows still coexist in the repo and env surface. They are not part of the current repo-analysis MVP loop and still need cleanup or clearer separation later.

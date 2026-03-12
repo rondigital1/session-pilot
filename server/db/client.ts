@@ -51,6 +51,43 @@ async function markMigrationApplied(
   });
 }
 
+async function backfillMigrationRecordForExistingTable(
+  client: ReturnType<typeof createClient>,
+  tableName: string
+): Promise<boolean> {
+  try {
+    const [entries, appliedRows] = await Promise.all([
+      readMigrationJournalEntries(),
+      client.execute("SELECT created_at FROM __drizzle_migrations"),
+    ]);
+
+    const appliedMigrationTimestamps = new Set(
+      appliedRows.rows.map((row) => toNumber(row.created_at))
+    );
+
+    for (const entry of entries) {
+      if (appliedMigrationTimestamps.has(entry.when)) {
+        continue;
+      }
+
+      const migrationSql = await readMigrationSql(entry.tag);
+      if (!migrationCreatesTable(migrationSql, tableName)) {
+        continue;
+      }
+
+      await markMigrationApplied(client, entry);
+      console.log(
+        `Schema update: Backfilled migration ${entry.tag} as applied (${tableName} already exists)`
+      );
+      return true;
+    }
+  } catch (error) {
+    console.error(`Warning: Could not backfill migration records for ${tableName}:`, error);
+  }
+
+  return false;
+}
+
 function toNumber(value: unknown): number {
   if (typeof value === "number") {
     return value;
@@ -227,6 +264,99 @@ async function ensureSchemaUpToDate(client: ReturnType<typeof createClient>) {
     schemaUpdated = true;
   }
 
+  const repoRootsTable = await client.execute(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='repo_roots'"
+  );
+  if (repoRootsTable.rows.length === 0) {
+    await client.executeMultiple(`
+      CREATE TABLE repo_roots (
+        id TEXT PRIMARY KEY NOT NULL,
+        label TEXT NOT NULL,
+        path TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE repositories (
+        id TEXT PRIMARY KEY NOT NULL,
+        root_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL,
+        remote_origin TEXT,
+        default_branch TEXT,
+        current_branch TEXT,
+        is_dirty INTEGER NOT NULL DEFAULT 0,
+        fingerprint_hash TEXT,
+        profile_json TEXT,
+        last_analyzed_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (root_id) REFERENCES repo_roots(id) ON UPDATE no action ON DELETE no action
+      );
+      CREATE TABLE analysis_runs (
+        id TEXT PRIMARY KEY NOT NULL,
+        repository_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        fingerprint_hash TEXT,
+        profile_json TEXT NOT NULL,
+        findings_json TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        error TEXT,
+        created_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        FOREIGN KEY (repository_id) REFERENCES repositories(id) ON UPDATE no action ON DELETE no action
+      );
+      CREATE TABLE suggestions (
+        id TEXT PRIMARY KEY NOT NULL,
+        repository_id TEXT NOT NULL,
+        analysis_run_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        category TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        evidence_json TEXT NOT NULL,
+        impact_score INTEGER NOT NULL,
+        effort_score INTEGER NOT NULL,
+        confidence_score INTEGER NOT NULL,
+        risk_score INTEGER NOT NULL,
+        priority_score REAL NOT NULL,
+        autonomy_mode TEXT NOT NULL,
+        likely_files_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (repository_id) REFERENCES repositories(id) ON UPDATE no action ON DELETE no action,
+        FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id) ON UPDATE no action ON DELETE no action
+      );
+      CREATE TABLE execution_tasks (
+        id TEXT PRIMARY KEY NOT NULL,
+        repository_id TEXT NOT NULL,
+        suggestion_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued',
+        branch_name TEXT,
+        worktree_path TEXT,
+        task_spec_json TEXT NOT NULL,
+        agent_prompt TEXT NOT NULL,
+        validation_commands_json TEXT NOT NULL,
+        validation_results_json TEXT,
+        final_message TEXT,
+        error TEXT,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        cancelled_at INTEGER,
+        FOREIGN KEY (repository_id) REFERENCES repositories(id) ON UPDATE no action ON DELETE no action,
+        FOREIGN KEY (suggestion_id) REFERENCES suggestions(id) ON UPDATE no action ON DELETE no action
+      );
+      CREATE TABLE execution_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+        execution_task_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        event_data TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (execution_task_id) REFERENCES execution_tasks(id) ON UPDATE no action ON DELETE no action
+      );
+    `);
+    console.log("Schema update: Added repo orchestrator tables");
+    schemaUpdated = true;
+  }
+
   // Create indexes if they don't exist (idempotent operation)
   await client.executeMultiple(`
     CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id);
@@ -241,6 +371,22 @@ async function ensureSchemaUpToDate(client: ReturnType<typeof createClient>) {
     CREATE INDEX IF NOT EXISTS idx_ideas_created ON improvement_ideas(created_at);
     CREATE INDEX IF NOT EXISTS idx_feedback_idea ON idea_feedback(idea_id);
     CREATE INDEX IF NOT EXISTS idx_feedback_created ON idea_feedback(created_at);
+    CREATE INDEX IF NOT EXISTS idx_repo_roots_path ON repo_roots(path);
+    CREATE INDEX IF NOT EXISTS idx_repositories_root ON repositories(root_id);
+    CREATE INDEX IF NOT EXISTS idx_repositories_path ON repositories(path);
+    CREATE INDEX IF NOT EXISTS idx_repositories_last_analyzed ON repositories(last_analyzed_at);
+    CREATE INDEX IF NOT EXISTS idx_analysis_runs_repo ON analysis_runs(repository_id);
+    CREATE INDEX IF NOT EXISTS idx_analysis_runs_created ON analysis_runs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_analysis_runs_status ON analysis_runs(status);
+    CREATE INDEX IF NOT EXISTS idx_suggestions_repo ON suggestions(repository_id);
+    CREATE INDEX IF NOT EXISTS idx_suggestions_analysis ON suggestions(analysis_run_id);
+    CREATE INDEX IF NOT EXISTS idx_suggestions_priority ON suggestions(priority_score);
+    CREATE INDEX IF NOT EXISTS idx_execution_tasks_repo ON execution_tasks(repository_id);
+    CREATE INDEX IF NOT EXISTS idx_execution_tasks_suggestion ON execution_tasks(suggestion_id);
+    CREATE INDEX IF NOT EXISTS idx_execution_tasks_status ON execution_tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_execution_tasks_started ON execution_tasks(started_at);
+    CREATE INDEX IF NOT EXISTS idx_execution_events_task ON execution_events(execution_task_id);
+    CREATE INDEX IF NOT EXISTS idx_execution_events_created ON execution_events(created_at);
   `);
   if (hasSessionSummariesTable) {
     await client.executeMultiple(`
@@ -266,34 +412,32 @@ async function ensureSchemaUpToDate(client: ReturnType<typeof createClient>) {
   } else if (hasSessionSummariesTable) {
     // Backfill migration record when session_summaries was created manually in a prior release.
     try {
-      const [entries, appliedRows] = await Promise.all([
-        readMigrationJournalEntries(),
-        client.execute("SELECT created_at FROM __drizzle_migrations"),
-      ]);
-
-      const appliedMigrationTimestamps = new Set(
-        appliedRows.rows.map((row) => toNumber(row.created_at))
+      const backfilled = await backfillMigrationRecordForExistingTable(
+        client,
+        "session_summaries"
       );
-      for (const entry of entries) {
-        if (appliedMigrationTimestamps.has(entry.when)) {
-          continue;
-        }
-
-        const migrationSql = await readMigrationSql(entry.tag);
-        if (!migrationCreatesTable(migrationSql, "session_summaries")) {
-          continue;
-        }
-
-        await markMigrationApplied(client, entry);
-        console.log(
-          `Schema update: Backfilled migration ${entry.tag} as applied (session_summaries already exists)`
-        );
+      if (backfilled) {
         schemaUpdated = true;
-        break;
       }
     } catch (error) {
       console.error("Warning: Could not backfill migration records:", error);
     }
+  }
+
+  const didBackfillImproveMigration = await backfillMigrationRecordForExistingTable(
+    client,
+    "project_snapshots"
+  );
+  if (didBackfillImproveMigration) {
+    schemaUpdated = true;
+  }
+
+  const didBackfillRepoOrchestratorMigration = await backfillMigrationRecordForExistingTable(
+    client,
+    "repo_roots"
+  );
+  if (didBackfillRepoOrchestratorMigration) {
+    schemaUpdated = true;
   }
 
   if (schemaUpdated) {

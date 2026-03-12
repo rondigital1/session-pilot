@@ -3,3 +3,8 @@ export * from "./queries/sessions";
 export * from "./queries/tasks";
 export * from "./queries/signals";
 export * from "./queries/events";
+export * from "./queries/repoRoots";
+export * from "./queries/repositories";
+export * from "./queries/analysisRuns";
+export * from "./queries/suggestions";
+export * from "./queries/executions";
